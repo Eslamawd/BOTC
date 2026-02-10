@@ -609,19 +609,34 @@ class DatabaseManager {
   async cleanOldData(daysToKeep = 90) {
     if (!this.initialized) return;
 
+    if (!Number.isFinite(daysToKeep) || daysToKeep <= 0) {
+      console.log("🧹 Data cleanup skipped (daysToKeep <= 0)");
+      return;
+    }
+
     try {
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-      const cutoffISO = cutoffDate.toISOString();
+      const cutoffModifier = `-${daysToKeep} days`;
 
-      await this.runQuery(`DELETE FROM analyses WHERE timestamp < ?`, [
-        cutoffISO,
-      ]);
-      await this.runQuery(`DELETE FROM trades WHERE timestamp < ?`, [
-        cutoffISO,
-      ]);
+      const analysesResult = await this.runQuery(
+        `DELETE FROM analyses WHERE julianday(timestamp) < julianday('now', ?)`,
+        [cutoffModifier],
+      );
 
-      console.log(`🧹 Cleaned data older than ${daysToKeep} days`);
+      const tradesResult = await this.runQuery(
+        `DELETE FROM trades WHERE julianday(timestamp) < julianday('now', ?)`,
+        [cutoffModifier],
+      );
+
+      const patternsResult = await this.runQuery(
+        `DELETE FROM patterns WHERE julianday(lastSeen) < julianday('now', ?)`,
+        [cutoffModifier],
+      );
+
+      await this.runQuery("VACUUM");
+
+      console.log(
+        `🧹 Cleaned data older than ${daysToKeep} days (analyses: ${analysesResult.changes}, trades: ${tradesResult.changes}, patterns: ${patternsResult.changes})`,
+      );
     } catch (error) {
       console.error("❌ Error cleaning old data:", error.message);
     }

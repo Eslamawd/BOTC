@@ -61,18 +61,6 @@ class PortfolioManager {
     );
     console.log(`   Net Profit: $${this.portfolio.netProfit.toFixed(2)}`);
   }
-
-  updatePortfolio(tradeResult) {
-    this.portfolio.totalTrades++;
-    if (tradeResult.profit > 0) {
-      this.portfolio.wins++;
-    } else {
-      this.portfolio.losses++;
-    }
-    this.portfolio.netProfit += tradeResult.profit;
-    this.portfolio.balance += tradeResult.profit;
-    this.portfolio.trades.push(tradeResult);
-  }
 }
 
 module.exports = PortfolioManager;

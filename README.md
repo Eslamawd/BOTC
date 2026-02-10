@@ -59,6 +59,17 @@
 ✅ Self-Learning (التعلم الذاتي من البيانات التاريخية) 🆕
 ```
 
+**كيف يفكر SymbolicAI؟**
+
+- **تحويل السوق لأرقام**: يحول الشموع والمؤشرات و الـ Order Book لمقاييس رقمية قابلة للمقارنة.
+- **اكتشاف الأنماط**: يبحث عن تشكيلات متكررة في السعر والحجم.
+- **نمذجة احتمالية**: يبني احتمالات نجاح/فشل لكل إشارة بناء على البيانات الحالية والتاريخ.
+- **تجميع الأدلة**: يدمج نتائج الشموع + الفوليوم + الـ Order Book + الحيتان + الارتباطات.
+- **قواعد قرار ذكية**: يطبّق قواعد رياضية لتحديد LONG/SHORT/HOLD.
+- **تعلم ذاتي**: يزيد/يقلل الثقة عند تكرار أنماط نجحت سابقا.
+
+**النتيجة النهائية**: قرار واحد مع `confidence` واضح وأسباب داعمة يمكن مراجعتها.
+
 ### 📊 2. Order Book Analysis (WebSocket ONLY) 🆕
 
 ```javascript
@@ -261,19 +272,19 @@ npm install
 cp .env.example .env
 
 # 4. تعديل .env
-MODE=PAPER                              # PAPER للتجربة، REAL للتداول الحقيقي
+MODE=LIVE_PAPER                         # LIVE_PAPER للتجربة بأسعار حقيقية
 TRADING_TYPE=futures                    # futures أو spot
 LEVERAGE=5                              # الرافعة المالية (1-125)
 
 BINANCE_API_KEY=your_key_here           # للـ REAL mode فقط
 BINANCE_SECRET_KEY=your_secret_here     # للـ REAL mode فقط
-TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 ```
 
 ### ملاحظة مهمة:
 
-- **في PAPER mode**: لا تحتاج API keys (اتركها فارغة)
+- **في LIVE_PAPER/PAPER**: لا تحتاج API keys (اتركها فارغة)
 - **في REAL mode**: ضع API keys الحقيقية من Binance
 
 ---
@@ -312,9 +323,6 @@ src/
 └── modules/
     ├── BinanceOrderBookWS.js (141 lines)
     │   └── WebSocket لـ Order Book
-    │
-    ├── OrderBookAnalyzer.js (108 lines)
-    │   └── تحليل سطح الأوامر
     │
     ├── WhaleTracker.js (108 lines)
     │   └── رصد الحيتان
@@ -694,5 +702,6 @@ const stats = await database.getStats();
 ---
 
 **Made with ❤️ Eslam by GitHub Copilot** 🤖
-#   B O T C  
+#   B O T C 
+ 
  

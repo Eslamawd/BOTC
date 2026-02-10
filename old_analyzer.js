@@ -1,18 +1,19 @@
-/**
- * 🧠 Advanced AI Analyzer - المحلل الذكي الشامل
+﻿/**
+ * ≡ƒºá Advanced AI Analyzer - ╪º┘ä┘à╪¡┘ä┘ä ╪º┘ä╪░┘â┘è ╪º┘ä╪┤╪º┘à┘ä
  *
- * يجمع كل الميزات:
- * - EMA, RSI, Volume (الأساسيات)
- * - Order Book Analysis (تحليل سطح الأوامر)
- * - Whale Tracking (رصد الحيتان)
- * - Volume Profile (توزيع الأحجام)
- * - Symbolic AI (الذكاء الرياضي)
+ * ┘è╪¼┘à╪╣ ┘â┘ä ╪º┘ä┘à┘è╪▓╪º╪¬:
+ * - EMA, RSI, Volume (╪º┘ä╪ú╪│╪º╪│┘è╪º╪¬)
+ * - Order Book Analysis (╪¬╪¡┘ä┘è┘ä ╪│╪╖╪¡ ╪º┘ä╪ú┘ê╪º┘à╪▒)
+ * - Whale Tracking (╪▒╪╡╪» ╪º┘ä╪¡┘è╪¬╪º┘å)
+ * - Volume Profile (╪¬┘ê╪▓┘è╪╣ ╪º┘ä╪ú╪¡╪¼╪º┘à)
+ * - Symbolic AI (╪º┘ä╪░┘â╪º╪í ╪º┘ä╪▒┘è╪º╪╢┘è)
  *
- * يعطي قرار نهائي: BUY, SELL, أو HOLD
+ * ┘è╪╣╪╖┘è ┘é╪▒╪º╪▒ ┘å┘ç╪º╪ª┘è: BUY, SELL, ╪ú┘ê HOLD
  */
 
 const SymbolicAI = require("./ai/SymbolicAI");
 const VolumeProfileAnalyzer = require("./modules/VolumeProfileAnalyzer");
+const OrderBookAnalyzer = require("./modules/OrderBookAnalyzer");
 const WhaleTracker = require("./modules/WhaleTracker");
 
 class AdvancedAIAnalyzer {
@@ -22,7 +23,7 @@ class AdvancedAIAnalyzer {
     this.orderBookProvider = orderBookProvider;
     this.database = database;
 
-    // تهيئة المحللات
+    // ╪¬┘ç┘è╪ª╪⌐ ╪º┘ä┘à╪¡┘ä┘ä╪º╪¬
     this.symbolicAI = new SymbolicAI(
       {
         MIN_PATTERN_STRENGTH: 0.5,
@@ -32,15 +33,16 @@ class AdvancedAIAnalyzer {
         PREDICTION_HORIZON: 5,
       },
       database,
-    ); // تمرير database للـ AI
+    ); // ╪¬┘à╪▒┘è╪▒ database ┘ä┘ä┘Ç AI
 
     this.volumeAnalyzer = new VolumeProfileAnalyzer();
-    // ✅ إصلاح: تمرير database للـ WhaleTracker
+    this.orderBookAnalyzer = new OrderBookAnalyzer(exchange);
+    // Γ£à ╪Ñ╪╡┘ä╪º╪¡: ╪¬┘à╪▒┘è╪▒ database ┘ä┘ä┘Ç WhaleTracker
     this.whaleTracker = new WhaleTracker(database);
   }
 
   /**
-   * 🔍 التحليل الشامل - يستخدم كل الميزات (ASYNC لجلب البيانات الحقيقية)
+   * ≡ƒöì ╪º┘ä╪¬╪¡┘ä┘è┘ä ╪º┘ä╪┤╪º┘à┘ä - ┘è╪│╪¬╪«╪»┘à ┘â┘ä ╪º┘ä┘à┘è╪▓╪º╪¬ (ASYNC ┘ä╪¼┘ä╪¿ ╪º┘ä╪¿┘è╪º┘å╪º╪¬ ╪º┘ä╪¡┘é┘è┘é┘è╪⌐)
    */
   async analyze(candles, symbol) {
     if (!candles || candles.length < 100) {
@@ -48,16 +50,12 @@ class AdvancedAIAnalyzer {
     }
 
     try {
-      // ========== 1. البيانات الأساسية ==========
+      // ========== 1. ╪º┘ä╪¿┘è╪º┘å╪º╪¬ ╪º┘ä╪ú╪│╪º╪│┘è╪⌐ ==========
       const closes = candles.map((c) => c[4]);
       const volumes = candles.map((c) => c[5]);
       const currentPrice = closes[closes.length - 1];
-      const avgVolume =
-        volumes.length > 0
-          ? volumes.reduce((a, b) => a + b, 0) / volumes.length
-          : 0;
 
-      // ========== 2. حساب المؤشرات ==========
+      // ========== 2. ╪¡╪│╪º╪¿ ╪º┘ä┘à╪ñ╪┤╪▒╪º╪¬ ==========
       const indicators = this.calculateIndicators(candles);
 
       // ========== 3. Order Book (WebSocket ONLY) ==========
@@ -68,7 +66,7 @@ class AdvancedAIAnalyzer {
           this.config.USE_WEBSOCKET &&
           this.orderBookProvider
         ) {
-          // 🔌 استخدام WebSocket فقط - لا REST ولا محاكاة
+          // ≡ƒöî ╪º╪│╪¬╪«╪»╪º┘à WebSocket ┘ü┘é╪╖ - ┘ä╪º REST ┘ê┘ä╪º ┘à╪¡╪º┘â╪º╪⌐
           if (this.orderBookProvider.isReady(symbol)) {
             orderBook = this.orderBookProvider.getOrderBook(symbol);
             if (orderBook) {
@@ -76,45 +74,41 @@ class AdvancedAIAnalyzer {
               orderBook.source = "websocket";
             }
           } else {
-            // ⏳ WebSocket مش جاهز - نكمل بدون Order Book
+            // ΓÅ│ WebSocket ┘à╪┤ ╪¼╪º┘ç╪▓ - ┘å┘â┘à┘ä ╪¿╪»┘ê┘å Order Book
           }
         }
       } catch (e) {
         console.warn(
-          `⚠️ خطأ في WebSocket Order Book لـ ${symbol}: ${e.message}`,
+          `ΓÜá∩╕Å ╪«╪╖╪ú ┘ü┘è WebSocket Order Book ┘ä┘Ç ${symbol}: ${e.message}`,
         );
       }
 
-      // ========== 4. تحليل Volume Profile ==========
+      // ========== 4. ╪¬╪¡┘ä┘è┘ä Volume Profile ==========
       let volumeProfile = null;
       try {
         if (this.config.USE_VOLUME_PROFILE !== false) {
           volumeProfile = this.volumeAnalyzer.calculateVolumeProfile(candles);
         }
       } catch (e) {
-        // تجاهل إذا فشل Volume Profile
+        // ╪¬╪¼╪º┘ç┘ä ╪Ñ╪░╪º ┘ü╪┤┘ä Volume Profile
         volumeProfile = null;
       }
 
-      // ========== 5. رصد الحيتان (whale tracking) ==========
+      // ========== 5. ╪▒╪╡╪» ╪º┘ä╪¡┘è╪¬╪º┘å (whale tracking) ==========
       let whaleActivity = [];
       try {
         if (this.config.USE_WHALE_TRACKER && orderBook) {
-          const whaleResult = this.whaleTracker.analyzeWhales(
-            symbol,
-            orderBook,
-            {
-              avgVolume,
-              close: currentPrice,
-            },
+          whaleActivity = this.whaleTracker.detectWhales(
+            orderBook.bids || [],
+            orderBook.asks || [],
+            currentPrice,
           );
-          whaleActivity = whaleResult?.whales || [];
         }
       } catch (e) {
-        // تجاهل أخطاء whale tracking
+        // ╪¬╪¼╪º┘ç┘ä ╪ú╪«╪╖╪º╪í whale tracking
       }
 
-      // ========== 6. التحليل الشامل بواسطة Symbolic AI ==========
+      // ========== 6. ╪º┘ä╪¬╪¡┘ä┘è┘ä ╪º┘ä╪┤╪º┘à┘ä ╪¿┘ê╪º╪│╪╖╪⌐ Symbolic AI ==========
       const aiAnalysis = this.symbolicAI.comprehensiveAnalysis({
         symbol,
         candles,
@@ -125,10 +119,10 @@ class AdvancedAIAnalyzer {
         currentPrice,
       });
 
-      // ========== 7. بناء النتيجة النهائية ==========
-      const decision = aiAnalysis; // SymbolicAI يعطي قرار شامل
+      // ========== 7. ╪¿┘å╪º╪í ╪º┘ä┘å╪¬┘è╪¼╪⌐ ╪º┘ä┘å┘ç╪º╪ª┘è╪⌐ ==========
+      const decision = aiAnalysis; // SymbolicAI ┘è╪╣╪╖┘è ┘é╪▒╪º╪▒ ╪┤╪º┘à┘ä
 
-      // تحويل لصيغة متوافقة مع الكود الحالي
+      // ╪¬╪¡┘ê┘è┘ä ┘ä╪╡┘è╪║╪⌐ ┘à╪¬┘ê╪º┘ü┘é╪⌐ ┘à╪╣ ╪º┘ä┘â┘ê╪» ╪º┘ä╪¡╪º┘ä┘è
       const analysisResult = {
         symbol,
         timestamp: Date.now(),
@@ -141,13 +135,13 @@ class AdvancedAIAnalyzer {
           volumes[volumes.length - 1] /
           (volumes.slice(-20).reduce((a, b) => a + b, 0) / 20),
 
-        // القرار من Symbolic AI
-        side: decision.action, // "LONG", "SHORT", أو "HOLD"
+        // ╪º┘ä┘é╪▒╪º╪▒ ┘à┘å Symbolic AI
+        side: decision.action, // "LONG", "SHORT", ╪ú┘ê "HOLD"
         confidence: decision.confidence.toFixed(1),
         aiScore: decision.confidence,
         signals: decision.supportingFactors,
 
-        // للتوافق مع الكود القديم
+        // ┘ä┘ä╪¬┘ê╪º┘ü┘é ┘à╪╣ ╪º┘ä┘â┘ê╪» ╪º┘ä┘é╪»┘è┘à
         shouldBuy:
           decision.action === "LONG" &&
           decision.confidence >= this.config.MIN_CONFIDENCE,
@@ -155,24 +149,24 @@ class AdvancedAIAnalyzer {
           decision.action === "SHORT" &&
           decision.confidence >= this.config.MIN_CONFIDENCE,
 
-        // معلومات إضافية
+        // ┘à╪╣┘ä┘ê┘à╪º╪¬ ╪Ñ╪╢╪º┘ü┘è╪⌐
         analysis: {
           orderBook:
             !orderBook && this.config.USE_WEBSOCKET
-              ? "⏳ بانتظار WebSocket"
+              ? "ΓÅ│ ╪¿╪º┘å╪¬╪╕╪º╪▒ WebSocket"
               : orderBook?.simulated
-                ? "✅ محاكى (Backtest)"
-                : `✅ حقيقي (${orderBook?.source || "rest"})`,
+                ? "Γ£à ┘à╪¡╪º┘â┘ë (Backtest)"
+                : `Γ£à ╪¡┘é┘è┘é┘è (${orderBook?.source || "rest"})`,
           whales:
             whaleActivity.length > 0
-              ? `✅ ${whaleActivity.length} اكتُشف`
-              : "❌ لا يوجد",
-          volumeProfile: volumeProfile ? "✅ محلّل" : "❌ غير متاح",
+              ? `Γ£à ${whaleActivity.length} ╪º┘â╪¬┘Å╪┤┘ü`
+              : "Γ¥î ┘ä╪º ┘è┘ê╪¼╪»",
+          volumeProfile: volumeProfile ? "Γ£à ┘à╪¡┘ä┘æ┘ä" : "Γ¥î ╪║┘è╪▒ ┘à╪¬╪º╪¡",
           reasoning: decision.reasoning,
           warnings: decision.warnings,
         },
 
-        // 💾 بيانات للحفظ في Database
+        // ≡ƒÆ╛ ╪¿┘è╪º┘å╪º╪¬ ┘ä┘ä╪¡┘ü╪╕ ┘ü┘è Database
         _rawData: {
           indicators,
           orderBook: orderBook
@@ -188,7 +182,7 @@ class AdvancedAIAnalyzer {
         },
       };
 
-      // 💾 حفظ التحليل في Database
+      // ≡ƒÆ╛ ╪¡┘ü╪╕ ╪º┘ä╪¬╪¡┘ä┘è┘ä ┘ü┘è Database
       if (this.database && this.database.initialized) {
         try {
           const analysisId = await this.database.saveAnalysis({
@@ -202,19 +196,19 @@ class AdvancedAIAnalyzer {
             volume: analysisResult._rawData.volume,
             symbolicAI: analysisResult._rawData.symbolicAI,
           });
-          // ✅ إصلاح: التحقق من analysisId قبل الإسناد
+          // Γ£à ╪Ñ╪╡┘ä╪º╪¡: ╪º┘ä╪¬╪¡┘é┘é ┘à┘å analysisId ┘é╪¿┘ä ╪º┘ä╪Ñ╪│┘å╪º╪»
           if (analysisId) {
-            analysisResult.analysisId = analysisId; // لربط الصفقة لاحقاً
+            analysisResult.analysisId = analysisId; // ┘ä╪▒╪¿╪╖ ╪º┘ä╪╡┘ü┘é╪⌐ ┘ä╪º╪¡┘é╪º┘ï
           }
         } catch (dbError) {
-          console.warn(`⚠️ Database save error: ${dbError.message}`);
+          console.warn(`ΓÜá∩╕Å Database save error: ${dbError.message}`);
         }
       }
 
       return analysisResult;
     } catch (error) {
       console.error(
-        `❌ [AdvancedAIAnalyzer] Error analyzing ${symbol}:`,
+        `Γ¥î [AdvancedAIAnalyzer] Error analyzing ${symbol}:`,
         error.message,
       );
       return null;
@@ -222,7 +216,7 @@ class AdvancedAIAnalyzer {
   }
 
   /**
-   * حساب المؤشرات الأساسية
+   * ╪¡╪│╪º╪¿ ╪º┘ä┘à╪ñ╪┤╪▒╪º╪¬ ╪º┘ä╪ú╪│╪º╪│┘è╪⌐
    */
   calculateIndicators(candles) {
     const closes = candles.map((c) => c[4]);
@@ -238,7 +232,7 @@ class AdvancedAIAnalyzer {
       ema50: this.calculateEMA(closes, 50),
       ema200: this.calculateEMA(closes, 200),
       macd: macd,
-      macdSignal: macdSignal,
+      macdSignal: macdSignal, // Γ£à ╪Ñ╪╡┘ä╪º╪¡: ╪¡╪│╪º╪¿ MACD Signal
       stochastic: this.calculateStochastic(highs, lows, closes, 14),
       atr: this.calculateATR(highs, lows, closes, 14),
     };
@@ -272,7 +266,7 @@ class AdvancedAIAnalyzer {
   }
 
   calculateMACDSignal(closes) {
-    // ✅ إضافة: حساب MACD Signal Line (EMA 9 من MACD)
+    // Γ£à ╪Ñ╪╢╪º┘ü╪⌐: ╪¡╪│╪º╪¿ MACD Signal Line (EMA 9 ┘à┘å MACD)
     if (closes.length < 35) return 0;
 
     const macdValues = [];
@@ -311,6 +305,61 @@ class AdvancedAIAnalyzer {
 
     const recentTRs = trs.slice(-period);
     return recentTRs.reduce((a, b) => a + b, 0) / recentTRs.length;
+  }
+
+  /**
+   * ≡ƒôè ┘à╪¡╪º┘â╪º╪⌐ Order Book ┘ä┘ä┘Ç Backtest
+   * Simulate Order Book for backtesting
+   */
+  simulateOrderBook(candles, currentPrice) {
+    if (!candles || candles.length < 20) return null;
+
+    const recentCandles = candles.slice(-20);
+    const volumes = recentCandles.map((c) => c[5]);
+    const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+
+    // ╪¡╪│╪º╪¿ ╪º╪¬╪¼╪º┘ç ╪º┘ä╪│╪╣╪▒
+    const priceChange =
+      recentCandles[recentCandles.length - 1][4] - recentCandles[0][4];
+    const trendStrength = Math.abs(priceChange) / recentCandles[0][4];
+
+    // ╪Ñ┘å╪┤╪º╪í Order Book ╪º┘ü╪¬╪▒╪º╪╢┘è
+    const spread = currentPrice * 0.0001; // 0.01% spread
+    const baseVolume = avgVolume * 0.1; // 10% ┘à┘å ┘à╪¬┘ê╪│╪╖ ╪º┘ä╪¡╪¼┘à
+
+    // ╪Ñ┘å╪┤╪º╪í bids ┘ê asks ╪¿┘å╪º╪í┘ï ╪╣┘ä┘ë ╪º┘ä╪º╪¬╪¼╪º┘ç
+    const bids = [];
+    const asks = [];
+
+    for (let i = 0; i < 20; i++) {
+      const bidPrice = currentPrice - spread * (i + 1);
+      const askPrice = currentPrice + spread * (i + 1);
+
+      // ╪¡╪¼┘à ╪ú┘â╪¿╪▒ ┘ä┘ä╪ú╪│╪╣╪º╪▒ ╪º┘ä╪ú┘é╪▒╪¿
+      let bidVolume = baseVolume * (1 - i * 0.05);
+      let askVolume = baseVolume * (1 - i * 0.05);
+
+      // ╪¬╪╣╪»┘è┘ä ╪¿┘å╪º╪í┘ï ╪╣┘ä┘ë ╪º┘ä╪º╪¬╪¼╪º┘ç
+      if (priceChange > 0) {
+        // ╪º╪¬╪¼╪º┘ç ╪╡╪º╪╣╪» - bids ╪ú┘é┘ê┘ë
+        bidVolume *= 1.2;
+        askVolume *= 0.8;
+      } else if (priceChange < 0) {
+        // ╪º╪¬╪¼╪º┘ç ┘ç╪º╪¿╪╖ - asks ╪ú┘é┘ê┘ë
+        bidVolume *= 0.8;
+        askVolume *= 1.2;
+      }
+
+      bids.push([bidPrice, bidVolume]);
+      asks.push([askPrice, askVolume]);
+    }
+
+    return {
+      bids,
+      asks,
+      timestamp: Date.now(),
+      simulated: true, // ╪╣┘ä╪º┘à╪⌐ ╪ú┘å┘ç simulated
+    };
   }
 }
 

@@ -31,7 +31,6 @@ class TradeManager {
 
     const side = analysis.side || "BUY"; // BUY/LONG للشراء، SELL/SHORT للبيع
     const isLong = side === "BUY" || side === "LONG";
-    const isShort = side === "SELL" || side === "SHORT";
 
     // حساب الكمية (quantity) = positionSize / price
     const quantity = positionSize / price;

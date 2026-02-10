@@ -67,7 +67,7 @@ class WhaleTracker {
     }
 
     // حفظ بيانات الحيتان في قاعدة البيانات
-    if (this.dbManager) {
+    if (this.dbManager?.saveWhaleSighting) {
       this.dbManager
         .saveWhaleSighting(symbol, {
           count: whales.length,
@@ -86,23 +86,7 @@ class WhaleTracker {
     return { score, reasons, warnings, whales, dynamicThreshold };
   }
 
-  /**
-   * الحصول على معلومات الحيتان من آخر تحليل
-   * Get whale information from last analysis
-   */
-  getWhaleInfo(symbol) {
-    return this.volumeHistory[symbol] || null;
-  }
-
-  /**
-   * هل هناك حيتان قوية تدعم السعر؟
-   * Check if there are strong whales supporting price
-   */
-  hasStrongWhaleSupport(whales, minCount = 1) {
-    if (!whales || !Array.isArray(whales)) return false;
-    const frontLineWhales = whales.filter((w) => w.position <= 3).length;
-    return frontLineWhales >= minCount;
-  }
+  // ملاحظة: تم حذف دوال غير مستخدمة لتقليل التعقيد
 }
 
 module.exports = WhaleTracker;

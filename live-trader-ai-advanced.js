@@ -8,7 +8,7 @@
  * ✅ Trailing Take Profit (يتابع الأرباح للأعلى)
  * ✅ Multi-Symbol Trading (عملات متعددة)
  * ✅ Realistic Returns (مع الرسوم والعمولات)
- * ✅ Works for BACKTEST & LIVE TRADING
+ * ✅ Works for LIVE TRADING (simulation or real execution)
  */
 
 require("dotenv").config();
@@ -65,17 +65,19 @@ const CONFIG = {
   VOLUME_RATIO_MIN: 1.2, // ⬇️ خفضنا من 2.0 لـ 1.2
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
-  // PAPER = backtest على شموع قديمة
-  // LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
+  // PAPER/LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
   // REAL = تداول حقيقي بأوامر فعلية
   MODE: process.env.MODE || "LIVE_PAPER", // Default = LIVE_PAPER (آمن + حقيقي)
 
   // ⏱️ فترة التحديث للوضع Live (بالثواني)
   LIVE_UPDATE_INTERVAL: 60, // كل 60 ثانية (1 دقيقة)
 
+  // 💾 Database
+  DATA_DIR: process.env.DATA_DIR || "data",
+  DATA_RETENTION_DAYS: parseInt(process.env.DATA_RETENTION_DAYS) || 20,
+
   // 📲 Telegram
   ENABLE_TELEGRAM: true,
-  TELEGRAM_ON_BACKTEST: true, // ✅ يرسل في PAPER mode أيضاً
 };
 
 class AdvancedTradingAI {
@@ -120,7 +122,7 @@ class AdvancedTradingAI {
     }
 
     // 💾 Database للتعلم
-    this.database = new DatabaseManager("data");
+    this.database = new DatabaseManager(config.DATA_DIR);
 
     // Modules - استخدام المحلل المتقدم الجديد
     this.analyzer = new AdvancedAIAnalyzer(
@@ -132,9 +134,7 @@ class AdvancedTradingAI {
     this.tradeManager = new TradeManager(config);
     this.portfolioManager = new PortfolioManager(config, this.mode);
     this.telegramManager = new TelegramBotManager();
-    this.telegramEnabled =
-      config.ENABLE_TELEGRAM &&
-      (config.MODE === "REAL" || config.TELEGRAM_ON_BACKTEST);
+    this.telegramEnabled = config.ENABLE_TELEGRAM;
 
     // Log telegram status
     console.log(`📲 Telegram: ${this.telegramEnabled ? "✅ مفعل" : "❌ معطل"}`);
@@ -146,8 +146,6 @@ class AdvancedTradingAI {
     this.balance = config.INITIAL_BALANCE;
     this.allTrades = [];
     this.symbolData = {};
-    this.marketData = {};
-    this.orderBooks = {};
     this.performance = {
       trades: 0,
       wins: 0,
@@ -162,300 +160,26 @@ class AdvancedTradingAI {
       lastSignal: {},
     };
 
-    config.SYMBOLS.forEach((symbol) => {
+    config.SYMBOLS.forEach((symbol) => this.ensureSymbolData(symbol));
+  }
+
+  ensureSymbolData(symbol) {
+    if (!this.symbolData[symbol]) {
       this.symbolData[symbol] = {
-        candles1h: [], // 📊 شموع الساعة (الاتجاه)
-        candles15m: [], // 📊 شموع الربع ساعة (التوقيت)
         activeTrades: [],
         completedTrades: [],
         dailyProfit: 0,
         orderBook: null,
       };
-    });
-  }
-
-  /**
-   * 📥 جلب البيانات من Binance (تايم فريمين: 1h + 15m)
-   */
-  async fetchSymbolData(symbol) {
-    try {
-      // 📊 1. جلب شموع الساعة (1h) - للاتجاه العام
-      let candles1h = [];
-      let since1h = undefined;
-
-      for (let batch = 0; batch < 2; batch++) {
-        const candles = await this.exchange.fetchOHLCV(
-          symbol,
-          this.config.TIMEFRAME_TREND,
-          since1h,
-          1000,
-        );
-        if (!candles || candles.length === 0) break;
-        candles1h = candles.concat(candles1h);
-        since1h = candles[0][0];
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-      candles1h.reverse();
-
-      // 📊 2. جلب شموع الربع ساعة (15m) - لتوقيت الدخول
-      let candles15m = [];
-      let since15m = undefined;
-
-      for (let batch = 0; batch < 2; batch++) {
-        const candles = await this.exchange.fetchOHLCV(
-          symbol,
-          this.config.TIMEFRAME_ENTRY,
-          since15m,
-          1000,
-        );
-        if (!candles || candles.length === 0) break;
-        candles15m = candles.concat(candles15m);
-        since15m = candles[0][0];
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-      candles15m.reverse();
-
-      // حفظ البيانات
-      this.symbolData[symbol].candles1h = candles1h;
-      this.symbolData[symbol].candles15m = candles15m;
-
-      this.marketData[symbol] = {
-        candles1h,
-        candles15m,
-        lastUpdate: Date.now(),
-        source: "binance",
-        orderBook: null,
-      };
-
-      console.log(
-        `✅ [${symbol}] Loaded: ${candles1h.length} x 1h + ${candles15m.length} x 15m candles`,
-      );
-      return { candles1h, candles15m };
-    } catch (e) {
-      console.error(`❌ [${symbol}] Error:`, e.message);
-      return { candles1h: [], candles15m: [] };
     }
-  }
-
-  /**
-   * ⚙️ معالجة رمز واحد (تحليل متعدد الإطارات الزمنية)
-   */
-  async runSymbol(symbol) {
-    const candles1h = this.symbolData[symbol]?.candles1h || [];
-    const candles15m = this.symbolData[symbol]?.candles15m || [];
-
-    if (candles1h.length < 200 || candles15m.length < 200) {
-      console.log(
-        `⚠️  [${symbol}] بيانات غير كافية (1h: ${candles1h.length}, 15m: ${candles15m.length})`,
-      );
-      return 0;
-    }
-
-    let tradeCount = 0;
-    console.log(
-      `\n⚙️  معالجة [${symbol}] | 1h: ${candles1h.length} | 15m: ${candles15m.length} شمعة...`,
-    );
-
-    try {
-      // 🔄 نستخدم 15m للتكرار (أكثر دقة في التوقيت)
-      for (let i = 200; i < candles15m.length; i++) {
-        const candle15m = candles15m[i];
-        const price = candle15m[4];
-        const timestamp = candle15m[0];
-
-        // 📊 Order Book من WebSocket
-        const wsOrderBook = this.orderBookWs?.getOrderBook(symbol) || null;
-        if (wsOrderBook) {
-          this.orderBooks[symbol] = wsOrderBook;
-          this.symbolData[symbol].orderBook = wsOrderBook;
-          if (this.marketData[symbol]) {
-            this.marketData[symbol].orderBook = wsOrderBook;
-            this.marketData[symbol].lastUpdate = Date.now();
-          }
-        }
-
-        // تحديث الصفقات القائمة
-        const activeTrades = this.symbolData[symbol].activeTrades.slice();
-        const tradesToKeep = [];
-        for (const trade of activeTrades) {
-          const { shouldClose, exitPrice, reason } =
-            this.tradeManager.updateTradeTrailing(trade, price, timestamp);
-
-          if (shouldClose) {
-            await this.closeTrade(symbol, trade, exitPrice, reason);
-          } else {
-            tradesToKeep.push(trade);
-          }
-        }
-        this.symbolData[symbol].activeTrades = tradesToKeep;
-
-        // فتح صفقة جديدة (Multi-Timeframe Logic)
-        if (
-          this.symbolData[symbol].activeTrades.length <
-          this.config.MAX_CONCURRENT_TRADES_PER_SYMBOL
-        ) {
-          // 📊 1. تحليل الساعة (1h) - الاتجاه العام
-          const index1h = Math.floor(i / 4); // كل 4 شموع 15m = شمعة 1h
-          if (index1h >= candles1h.length) continue;
-
-          const trend1h = await this.analyzer.analyze(
-            candles1h.slice(0, index1h + 1),
-            symbol,
-          );
-
-          // 📊 2. تحليل الربع ساعة (15m) - توقيت الدخول
-          const entry15m = await this.analyzer.analyze(
-            candles15m.slice(0, i + 1),
-            symbol,
-          );
-
-          const trendSide = trend1h?.side || "HOLD";
-          const trendConf = Number(trend1h?.confidence || 0);
-          const entrySide = entry15m?.side || "HOLD";
-          const entryConf = Number(entry15m?.confidence || 0);
-          this.liveStatus.lastAnalysis[symbol] = Date.now();
-
-          // Debug: طباعة أول تحليل
-          if (i === 200) {
-            console.log(
-              `   🕐 1h Trend: ${trend1h?.side || "HOLD"} (${trend1h?.confidence || 0}%)`,
-            );
-            console.log(
-              `   🕒 15m Entry: ${entry15m?.side || "HOLD"} (${entry15m?.confidence || 0}%)`,
-            );
-            console.log(
-              `   📊 OrderBook: ${entry15m?.analysis?.orderBook || "N/A"}`,
-            );
-            console.log(`   🐋 Whales: ${entry15m?.analysis?.whales || "N/A"}`);
-            console.log(
-              `   📈 VolumeProfile: ${entry15m?.analysis?.volumeProfile || "N/A"}`,
-            );
-          }
-
-          // ✅ شرط الدخول: توافق الاتجاهين
-          let shouldEnter = false;
-          let finalSignal = null;
-
-          if (this.config.REQUIRE_TREND_CONFIRMATION) {
-            // يجب توافق 1h و 15m
-            if (trend1h?.side === "LONG" && entry15m?.shouldBuy) {
-              shouldEnter = true;
-              finalSignal = "BUY";
-            } else if (trend1h?.side === "SHORT" && entry15m?.shouldSell) {
-              shouldEnter = true;
-              finalSignal = "SELL";
-            }
-          } else {
-            // استخدام 15m فقط
-            if (entry15m?.shouldBuy) {
-              shouldEnter = true;
-              finalSignal = "BUY";
-            } else if (entry15m?.shouldSell) {
-              shouldEnter = true;
-              finalSignal = "SELL";
-            }
-          }
-
-          let signalStatus = "skip";
-          if (shouldEnter) {
-            signalStatus = "ready";
-          } else if (
-            (trendSide === "LONG" && entrySide === "LONG") ||
-            (trendSide === "SHORT" && entrySide === "SHORT")
-          ) {
-            signalStatus =
-              entryConf >= this.config.MIN_CONFIDENCE ? "ready" : "near";
-          }
-
-          this.liveStatus.lastSignal[symbol] = {
-            trendSide,
-            trendConf,
-            entrySide,
-            entryConf,
-            status: signalStatus,
-            updatedAt: Date.now(),
-          };
-
-          // 🟢 فتح صفقة
-          if (shouldEnter && finalSignal) {
-            const analysis = finalSignal === "BUY" ? entry15m : entry15m;
-            analysis.side = finalSignal === "BUY" ? "LONG" : "SHORT";
-
-            const trade = this.tradeManager.openTrade(
-              symbol,
-              price,
-              analysis,
-              this.balance,
-              this.symbolData[symbol].activeTrades.length,
-            );
-
-            if (trade) {
-              this.symbolData[symbol].activeTrades.push(trade);
-              this.balance -= trade.positionSize;
-
-              const emoji = finalSignal === "BUY" ? "🟢" : "🔴";
-              const action = finalSignal === "BUY" ? "BUY" : "SELL";
-
-              console.log(
-                `${emoji} [${symbol}] ${action} @ $${price.toFixed(2)} | 1h: ${trend1h?.side} | 15m: ${entry15m?.side} | Conf: ${analysis.confidence}%`,
-              );
-
-              // 💾 حفظ الصفقة في Database
-              if (this.database && this.database.initialized) {
-                try {
-                  await this.database.saveTrade({
-                    symbol: trade.symbol,
-                    side: trade.side,
-                    entryPrice: trade.entryPrice,
-                    quantity: trade.quantity,
-                    stopLoss: trade.stopLoss,
-                    takeProfit: trade.takeProfit,
-                    confidence: trade.confidence,
-                    analysisId: analysis.analysisId,
-                    status: "OPEN",
-                  });
-                } catch (dbError) {
-                  console.warn(
-                    `⚠️ Database save trade error: ${dbError.message}`,
-                  );
-                }
-              }
-
-              await this.notifyTelegramEntry(trade, analysis);
-              tradeCount++;
-            }
-          }
-        }
-
-        if (i % 200 === 0) {
-          const progress = ((i / candles15m.length) * 100).toFixed(1);
-          process.stdout.write(
-            `\r  [${symbol}] ${progress}% | Active: ${this.symbolData[symbol].activeTrades.length} | Completed: ${this.symbolData[symbol].completedTrades.length}`,
-          );
-        }
-      } // نهاية الحلقة for
-    } catch (e) {
-      console.error(`❌ Error in runSymbol for ${symbol}:`, e.message);
-      console.error(e.stack);
-    }
-
-    // إغلاق الصفقات المتبقية
-    const lastPrice = candles15m[candles15m.length - 1][4];
-    for (const trade of this.symbolData[symbol].activeTrades.slice()) {
-      await this.closeTrade(symbol, trade, lastPrice, "END");
-    }
-
-    console.log(
-      `\n  ✅ [${symbol}] انتهي: ${tradeCount} صفقة جديدة، ${this.symbolData[symbol].completedTrades.length} مكتملة`,
-    );
-    return tradeCount;
   }
 
   /**
    * 🔴 LIVE Mode - تداول حقيقي بأسعار live (LIVE_PAPER أو REAL)
    */
-  async runLiveMode() {
-    console.log("🚀 Starting live trading loop...");
+  async runLiveMode(executeTrades = false) {
+    const modeLabel = executeTrades ? "REAL" : "SIM";
+    console.log(`🚀 Starting live trading loop... (${modeLabel})`);
     console.log(`⏱️  Update interval: ${this.config.LIVE_UPDATE_INTERVAL}s\n`);
 
     let iteration = 0;
@@ -475,7 +199,7 @@ class AdvancedTradingAI {
       // تحليل كل رمز بشكل متوازي
       await Promise.all(
         this.config.SYMBOLS.map((symbol) =>
-          this.analyzeLiveSymbol(symbol, timestamp),
+          this.analyzeLiveSymbol(symbol, timestamp, executeTrades),
         ),
       );
 
@@ -492,11 +216,91 @@ class AdvancedTradingAI {
     }
   }
 
+  buildEntryDecision(trend1h, entry15m) {
+    const trendSide = trend1h?.side || "HOLD";
+    const trendConf = Number(trend1h?.confidence || 0);
+    const entrySide = entry15m?.side || "HOLD";
+    const entryConf = Number(entry15m?.confidence || 0);
+
+    let shouldEnter = false;
+    let finalSignal = null;
+
+    if (this.config.REQUIRE_TREND_CONFIRMATION) {
+      if (trendSide === "LONG" && entry15m?.shouldBuy) {
+        shouldEnter = true;
+        finalSignal = "BUY";
+      } else if (trendSide === "SHORT" && entry15m?.shouldSell) {
+        shouldEnter = true;
+        finalSignal = "SELL";
+      }
+    } else {
+      if (entry15m?.shouldBuy) {
+        shouldEnter = true;
+        finalSignal = "BUY";
+      } else if (entry15m?.shouldSell) {
+        shouldEnter = true;
+        finalSignal = "SELL";
+      }
+    }
+
+    let status = "skip";
+    if (shouldEnter) {
+      status = "ready";
+    } else if (
+      (trendSide === "LONG" && entrySide === "LONG") ||
+      (trendSide === "SHORT" && entrySide === "SHORT")
+    ) {
+      status = entryConf >= this.config.MIN_CONFIDENCE ? "ready" : "near";
+    }
+
+    return {
+      trendSide,
+      trendConf,
+      entrySide,
+      entryConf,
+      shouldEnter,
+      finalSignal,
+      status,
+    };
+  }
+
+  logModeBanner() {
+    if (this.mode === "PAPER") {
+      console.log("✅  ======================================");
+      console.log(
+        "✅  PAPER MODE: تداول تجريبي بأسعار حقيقية (Alias لـ LIVE_PAPER)",
+      );
+      console.log("✅  الأسعار من Binance مباشرة (real-time)");
+      console.log("✅  الصفقات simulation فقط (آمن - لا تنفيذ فعلي)");
+      console.log("✅  ======================================\n");
+      return;
+    }
+
+    if (this.mode === "LIVE_PAPER") {
+      console.log("✅  ======================================");
+      console.log("✅  LIVE_PAPER MODE: تداول تجريبي بأسعار حقيقية!");
+      console.log("✅  الأسعار من Binance مباشرة (real-time)");
+      console.log("✅  الصفقات simulation فقط (آمن - لا تنفيذ فعلي)");
+      console.log("✅  ======================================\n");
+      return;
+    }
+
+    if (this.mode === "REAL") {
+      console.log("🚨  ======================================");
+      console.log("🚨  REAL MODE: تداول حقيقي بأموال فعلية!");
+      console.log("🚨  الأوامر تُنفذ على Binance فعلياً");
+      console.log("🚨  رصيدك الحقيقي معرض للربح/الخسارة");
+      console.log("🚨  ======================================\n");
+    }
+  }
+
   /**
    * 🔍 تحليل رمز واحد في LIVE Mode
    */
-  async analyzeLiveSymbol(symbol, timestamp) {
+  async analyzeLiveSymbol(symbol, timestamp, executeTrades = false) {
     try {
+      this.ensureSymbolData(symbol);
+
       // 1️⃣ جلب السعر الحالي (live price)
       const ticker = await this.exchange.fetchTicker(symbol);
       const currentPrice = ticker.last;
@@ -530,7 +334,6 @@ class AdvancedTradingAI {
       // 3️⃣ Order Book من WebSocket
       const wsOrderBook = this.orderBookWs?.getOrderBook(symbol) || null;
       if (wsOrderBook) {
-        this.orderBooks[symbol] = wsOrderBook;
         this.symbolData[symbol].orderBook = wsOrderBook;
       }
 
@@ -549,66 +352,38 @@ class AdvancedTradingAI {
         }
       }
 
-      if (!this.symbolData[symbol]) {
-        this.symbolData[symbol] = {
-          activeTrades: [],
-          completedTrades: [],
-          dailyProfit: 0,
-        };
-      }
       this.symbolData[symbol].activeTrades = tradesToKeep;
 
       // 5️⃣ تحليل multi-timeframe
       const trend1h = await this.analyzer.analyze(candles1h, symbol);
       const entry15m = await this.analyzer.analyze(candles15m, symbol);
 
-      const trendSide = trend1h?.side || "HOLD";
-      const trendConf = Number(trend1h?.confidence || 0);
-      const entrySide = entry15m?.side || "HOLD";
-      const entryConf = Number(entry15m?.confidence || 0);
+      const decision = this.buildEntryDecision(trend1h, entry15m);
 
-      console.log(`   🕐 1h Trend: ${trendSide} (${trendConf.toFixed(1)}%)`);
-      console.log(`   🕒 15m Entry: ${entrySide} (${entryConf.toFixed(1)}%)`);
+      console.log(
+        `   🕐 1h Trend: ${decision.trendSide} (${decision.trendConf.toFixed(1)}%)`,
+      );
+      console.log(
+        `   🕒 15m Entry: ${decision.entrySide} (${decision.entryConf.toFixed(1)}%)`,
+      );
 
       // تحديث live status
       this.liveStatus.lastAnalysis[symbol] = Date.now();
       this.liveStatus.lastSignal[symbol] = {
-        trendSide,
-        trendConf,
-        entrySide,
-        entryConf,
-        status: "analyzed",
+        trendSide: decision.trendSide,
+        trendConf: decision.trendConf,
+        entrySide: decision.entrySide,
+        entryConf: decision.entryConf,
+        status: decision.status,
         updatedAt: Date.now(),
       };
 
       // 6️⃣ فتح صفقة جديدة (إذا كانت الشروط مستوفاة)
       const maxTrades = this.config.MAX_CONCURRENT_TRADES_PER_SYMBOL;
       if (this.symbolData[symbol].activeTrades.length < maxTrades) {
-        let shouldEnter = false;
-        let finalSignal = null;
-
-        // التحقق من توافق الإطارين الزمنيين
-        if (this.config.REQUIRE_TREND_CONFIRMATION) {
-          if (trend1h?.side === "LONG" && entry15m?.shouldBuy) {
-            shouldEnter = true;
-            finalSignal = "BUY";
-          } else if (trend1h?.side === "SHORT" && entry15m?.shouldSell) {
-            shouldEnter = true;
-            finalSignal = "SELL";
-          }
-        } else {
-          if (entry15m?.shouldBuy) {
-            shouldEnter = true;
-            finalSignal = "BUY";
-          } else if (entry15m?.shouldSell) {
-            shouldEnter = true;
-            finalSignal = "SELL";
-          }
-        }
-
-        if (shouldEnter && finalSignal) {
+        if (decision.shouldEnter && decision.finalSignal) {
           const analysis = entry15m;
-          analysis.side = finalSignal === "BUY" ? "LONG" : "SHORT";
+          analysis.side = decision.finalSignal === "BUY" ? "LONG" : "SHORT";
 
           const trade = this.tradeManager.openTrade(
             symbol,
@@ -619,14 +394,15 @@ class AdvancedTradingAI {
           );
 
           if (trade) {
+            trade.executionMode = executeTrades ? "REAL" : "SIM";
             this.symbolData[symbol].activeTrades.push(trade);
             this.balance -= trade.positionSize;
 
-            const emoji = finalSignal === "BUY" ? "🟢" : "🔴";
-            const action = finalSignal === "BUY" ? "BUY" : "SELL";
+            const emoji = decision.finalSignal === "BUY" ? "🟢" : "🔴";
+            const action = decision.finalSignal === "BUY" ? "BUY" : "SELL";
 
             console.log(
-              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${trendSide} | 15m: ${entrySide} | Conf: ${analysis.confidence}%`,
+              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Mode: ${trade.executionMode}`,
             );
 
             // حفظ في Database
@@ -861,34 +637,15 @@ class AdvancedTradingAI {
     console.log("\n🚀 ADVANCED TRADING AI - Modular & Fast\n");
     console.log(`📊 Symbols: ${this.config.SYMBOLS.join(", ")}`);
     console.log(`💰 Initial Balance: $${this.config.INITIAL_BALANCE}`);
-    console.log(`🎯 Mode: ${this.config.MODE}`);
+    console.log(`🎯 Mode: ${this.mode}`);
     console.log(`📈 Min Confidence: ${this.config.MIN_CONFIDENCE}%\n`);
 
-    // ⚠️ تحذير هام للـ PAPER mode
-    if (this.mode === "PAPER") {
-      console.log("⚠️  ======================================");
-      console.log("⚠️  PAPER MODE يستخدم بيانات تاريخية فقط!");
-      console.log("⚠️  الأسعار هنا ليست حقيقية (من candles قديمة)");
-      console.log("⚠️  للتداول التجريبي بأسعار حقيقية: MODE=LIVE_PAPER");
-      console.log("⚠️  للتداول الحقيقي: MODE=REAL");
-      console.log("⚠️  ======================================\n");
-    } else if (this.mode === "LIVE_PAPER") {
-      console.log("✅  ======================================");
-      console.log("✅  LIVE_PAPER MODE: تداول تجريبي بأسعار حقيقية!");
-      console.log("✅  الأسعار من Binance مباشرة (real-time)");
-      console.log("✅  الصفقات simulation فقط (آمن - لا تنفيذ فعلي)");
-      console.log("✅  ======================================\n");
-    } else if (this.mode === "REAL") {
-      console.log("🚨  ======================================");
-      console.log("🚨  REAL MODE: تداول حقيقي بأموال فعلية!");
-      console.log("🚨  الأوامر تُنفذ على Binance فعلياً");
-      console.log("🚨  رصيدك الحقيقي معرض للربح/الخسارة");
-      console.log("🚨  ======================================\n");
-    }
+    this.logModeBanner();
 
     // 💾 تهيئة Database
     console.log("💾 Initializing Database...");
     await this.database.initialize();
+    await this.database.cleanOldData(this.config.DATA_RETENTION_DAYS);
     // ✅ إصلاح: await للـ getStats لأنه async الآن (SQLite)
     const dbStats = await this.database.getStats();
     console.log(
@@ -899,12 +656,6 @@ class AdvancedTradingAI {
     console.log("🧠 Loading historical patterns for AI...");
     await this.analyzer.symbolicAI.learnFromHistory(null); // لكل الرموز
     console.log(`✅ AI ready with learned patterns\n`);
-
-    // جلب البيانات
-    console.log("🔄 جلب بيانات الرموز...");
-    await Promise.all(
-      this.config.SYMBOLS.map((symbol) => this.fetchSymbolData(symbol)),
-    );
 
     // 🔌 انتظار WebSocket حتى يصل لحالة مستقرة (3+ ticks لكل رمز)
     console.log("🔌 Waiting for WebSocket stability...");
@@ -946,18 +697,10 @@ class AdvancedTradingAI {
       await this.sendLiveReport();
     }
 
-    // 🔀 اختيار الوضع المناسب
-    if (this.mode === "LIVE_PAPER" || this.mode === "REAL") {
-      // 🔴 LIVE Mode: تداول حقيقي بأسعار live (real-time)
-      console.log("🔴 Starting LIVE Trading Mode (real-time prices)...\n");
-      await this.runLiveMode();
-    } else {
-      // 📝 PAPER Mode: backtest على شموع تاريخية
-      console.log("📝 Starting PAPER Mode (historical backtest)...\n");
-      await Promise.all(
-        this.config.SYMBOLS.map((symbol) => this.runSymbol(symbol)),
-      );
-    }
+    // 🔴 LIVE Mode: أسعار حقيقية لكل الأوضاع
+    const executeTrades = this.mode === "REAL";
+    console.log("🔴 Starting LIVE Trading Mode (real-time prices)...\n");
+    await this.runLiveMode(executeTrades);
 
     // عرض النتائج
     this.portfolioManager.displaySummary(
