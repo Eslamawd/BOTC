@@ -94,6 +94,7 @@ class AdvancedTradingAI {
       apiKey: this.mode === "REAL" ? process.env.BINANCE_API_KEY || "" : "",
       secret: this.mode === "REAL" ? process.env.BINANCE_SECRET_KEY || "" : "",
       enableRateLimit: true,
+      timeout: 30000, // 30 ثانية بدلاً من 10 ثواني
       options: {
         defaultType: config.TRADING_TYPE, // 'spot' or 'futures'
         ...(config.TRADING_TYPE === "futures" && {
