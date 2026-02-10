@@ -69,7 +69,7 @@ const CONFIG = {
   // LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
   // REAL = تداول حقيقي بأوامر فعلية
   MODE: process.env.MODE || "LIVE_PAPER", // Default = LIVE_PAPER (آمن + حقيقي)
-  
+
   // ⏱️ فترة التحديث للوضع Live (بالثواني)
   LIVE_UPDATE_INTERVAL: 60, // كل 60 ثانية (1 دقيقة)
 
@@ -465,22 +465,30 @@ class AdvancedTradingAI {
     while (true) {
       iteration++;
       const timestamp = Date.now();
-      
+
       console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-      console.log(`🔄 Iteration #${iteration} | ${new Date().toLocaleString()}`);
+      console.log(
+        `🔄 Iteration #${iteration} | ${new Date().toLocaleString()}`,
+      );
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
       // تحليل كل رمز بشكل متوازي
       await Promise.all(
-        this.config.SYMBOLS.map((symbol) => this.analyzeLiveSymbol(symbol, timestamp))
+        this.config.SYMBOLS.map((symbol) =>
+          this.analyzeLiveSymbol(symbol, timestamp),
+        ),
       );
 
       // عرض ملخص سريع
-      console.log(`\n💰 Balance: $${this.balance.toFixed(2)} | Active Trades: ${this.allTrades.filter(t => t.status === 'OPEN').length}`);
+      console.log(
+        `\n💰 Balance: $${this.balance.toFixed(2)} | Active Trades: ${this.allTrades.filter((t) => t.status === "OPEN").length}`,
+      );
 
       // انتظار قبل التكرار التالي
-      console.log(`⏸️  Waiting ${this.config.LIVE_UPDATE_INTERVAL}s until next update...\n`);
-      await new Promise(resolve => setTimeout(resolve, updateInterval));
+      console.log(
+        `⏸️  Waiting ${this.config.LIVE_UPDATE_INTERVAL}s until next update...\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, updateInterval));
     }
   }
 
@@ -492,14 +500,29 @@ class AdvancedTradingAI {
       // 1️⃣ جلب السعر الحالي (live price)
       const ticker = await this.exchange.fetchTicker(symbol);
       const currentPrice = ticker.last;
-      
+
       console.log(`📊 [${symbol}] Current Price: $${currentPrice.toFixed(2)}`);
 
       // 2️⃣ جلب شموع للتحليل (آخر 200 شمعة فقط)
-      const candles1h = await this.exchange.fetchOHLCV(symbol, this.config.TIMEFRAME_TREND, undefined, 200);
-      const candles15m = await this.exchange.fetchOHLCV(symbol, this.config.TIMEFRAME_ENTRY, undefined, 200);
+      const candles1h = await this.exchange.fetchOHLCV(
+        symbol,
+        this.config.TIMEFRAME_TREND,
+        undefined,
+        200,
+      );
+      const candles15m = await this.exchange.fetchOHLCV(
+        symbol,
+        this.config.TIMEFRAME_ENTRY,
+        undefined,
+        200,
+      );
 
-      if (!candles1h || !candles15m || candles1h.length < 100 || candles15m.length < 100) {
+      if (
+        !candles1h ||
+        !candles15m ||
+        candles1h.length < 100 ||
+        candles15m.length < 100
+      ) {
         console.log(`⚠️  [${symbol}] Insufficient data, skipping...`);
         return;
       }
@@ -514,9 +537,9 @@ class AdvancedTradingAI {
       // 4️⃣ تحديث الصفقات القائمة (Trailing SL/TP)
       const activeTrades = this.symbolData[symbol]?.activeTrades || [];
       const tradesToKeep = [];
-      
+
       for (const trade of activeTrades) {
-        const { shouldClose, exitPrice, reason } = 
+        const { shouldClose, exitPrice, reason } =
           this.tradeManager.updateTradeTrailing(trade, currentPrice, timestamp);
 
         if (shouldClose) {
@@ -525,7 +548,7 @@ class AdvancedTradingAI {
           tradesToKeep.push(trade);
         }
       }
-      
+
       if (!this.symbolData[symbol]) {
         this.symbolData[symbol] = {
           activeTrades: [],
@@ -592,7 +615,7 @@ class AdvancedTradingAI {
             currentPrice, // ← السعر الحقيقي الحالي!
             analysis,
             this.balance,
-            this.symbolData[symbol].activeTrades.length
+            this.symbolData[symbol].activeTrades.length,
           );
 
           if (trade) {
@@ -603,7 +626,7 @@ class AdvancedTradingAI {
             const action = finalSignal === "BUY" ? "BUY" : "SELL";
 
             console.log(
-              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${trendSide} | 15m: ${entrySide} | Conf: ${analysis.confidence}%`
+              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${trendSide} | 15m: ${entrySide} | Conf: ${analysis.confidence}%`,
             );
 
             // حفظ في Database

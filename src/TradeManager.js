@@ -48,26 +48,22 @@ class TradeManager {
       // Trailing mechanism
       highestPrice: price, // لـ LONG
       lowestPrice: price, // لـ SHORT
-      
+
       // ✅ Stop Loss: LONG = تحت السعر، SHORT = فوق السعر
-      stopLoss:
-        isLong
-          ? price * this.config.TRAILING_STOP_LOSS  // 0.94 = -6%
-          : price / this.config.TRAILING_STOP_LOSS, // 1/0.94 = +6%
-      trailingStopPrice:
-        isLong
-          ? price * this.config.TRAILING_STOP_LOSS
-          : price / this.config.TRAILING_STOP_LOSS,
+      stopLoss: isLong
+        ? price * this.config.TRAILING_STOP_LOSS // 0.94 = -6%
+        : price / this.config.TRAILING_STOP_LOSS, // 1/0.94 = +6%
+      trailingStopPrice: isLong
+        ? price * this.config.TRAILING_STOP_LOSS
+        : price / this.config.TRAILING_STOP_LOSS,
 
       // ✅ Take Profit: LONG = فوق السعر، SHORT = تحت السعر
-      takeProfit:
-        isLong
-          ? price * this.config.TRAILING_TAKE_PROFIT  // 1.12 = +12%
-          : price / this.config.TRAILING_TAKE_PROFIT, // 1/1.12 = -12%
-      trailingTPPrice:
-        isLong
-          ? price * this.config.TRAILING_TAKE_PROFIT
-          : price / this.config.TRAILING_TAKE_PROFIT,
+      takeProfit: isLong
+        ? price * this.config.TRAILING_TAKE_PROFIT // 1.12 = +12%
+        : price / this.config.TRAILING_TAKE_PROFIT, // 1/1.12 = -12%
+      trailingTPPrice: isLong
+        ? price * this.config.TRAILING_TAKE_PROFIT
+        : price / this.config.TRAILING_TAKE_PROFIT,
 
       confidence: parseFloat(analysis.confidence),
       signals: analysis.signals,
@@ -94,7 +90,8 @@ class TradeManager {
       }
 
       // Trailing Stop Loss - يتحرك للأعلى فقط
-      const newTrailingStop = trade.highestPrice * this.config.TRAILING_STOP_LOSS;
+      const newTrailingStop =
+        trade.highestPrice * this.config.TRAILING_STOP_LOSS;
       if (newTrailingStop > trade.trailingStopPrice) {
         trade.trailingStopPrice = newTrailingStop;
       }
@@ -128,7 +125,8 @@ class TradeManager {
       }
 
       // Trailing Stop Loss - يتحرك للأسفل فقط
-      const newTrailingStop = trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
+      const newTrailingStop =
+        trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
       if (newTrailingStop < trade.trailingStopPrice) {
         trade.trailingStopPrice = newTrailingStop;
       }
