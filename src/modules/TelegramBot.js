@@ -24,16 +24,18 @@ class TelegramBotManager {
    * إرسال رسالة تليجرام
    * Send a Telegram message
    */
-  async send(message, parseMode = "Markdown") {
+  async send(message, parseMode = null) {
     if (!this.enabled) {
       console.log(`[TELEGRAM SIMULATED]: ${message.substring(0, 100)}...`);
       return;
     }
 
     try {
-      await this.bot.sendMessage(this.chatId, message, {
-        parse_mode: parseMode,
-      });
+      const options = {};
+      if (parseMode) {
+        options.parse_mode = parseMode;
+      }
+      await this.bot.sendMessage(this.chatId, message, options);
     } catch (error) {
       console.error("❌ خطأ في إرسال رسالة Telegram:", error.message);
     }
