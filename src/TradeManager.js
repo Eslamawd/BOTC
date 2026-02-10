@@ -29,7 +29,9 @@ class TradeManager {
 
     if (positionSize < 0.5 || balance < riskAmount * 0.5) return null;
 
-    const side = analysis.side || "BUY"; // BUY أو SELL
+    const side = analysis.side || "BUY"; // BUY/LONG للشراء، SELL/SHORT للبيع
+    const isLong = side === "BUY" || side === "LONG";
+    const isShort = side === "SELL" || side === "SHORT";
 
     // حساب الكمية (quantity) = positionSize / price
     const quantity = positionSize / price;
@@ -46,23 +48,26 @@ class TradeManager {
       // Trailing mechanism
       highestPrice: price, // لـ LONG
       lowestPrice: price, // لـ SHORT
+      
+      // ✅ Stop Loss: LONG = تحت السعر، SHORT = فوق السعر
       stopLoss:
-        side === "BUY"
-          ? price * (1 - (this.config.TRAILING_STOP_LOSS - 1))
-          : price * (1 + (this.config.TRAILING_STOP_LOSS - 1)),
+        isLong
+          ? price * this.config.TRAILING_STOP_LOSS  // 0.94 = -6%
+          : price / this.config.TRAILING_STOP_LOSS, // 1/0.94 = +6%
       trailingStopPrice:
-        side === "BUY"
-          ? price * (1 - (this.config.TRAILING_STOP_LOSS - 1))
-          : price * (1 + (this.config.TRAILING_STOP_LOSS - 1)), // معكوس للـ SHORT
+        isLong
+          ? price * this.config.TRAILING_STOP_LOSS
+          : price / this.config.TRAILING_STOP_LOSS,
 
+      // ✅ Take Profit: LONG = فوق السعر، SHORT = تحت السعر
       takeProfit:
-        side === "BUY"
-          ? price * this.config.TRAILING_TAKE_PROFIT
-          : price * (2 - this.config.TRAILING_TAKE_PROFIT),
+        isLong
+          ? price * this.config.TRAILING_TAKE_PROFIT  // 1.12 = +12%
+          : price / this.config.TRAILING_TAKE_PROFIT, // 1/1.12 = -12%
       trailingTPPrice:
-        side === "BUY"
+        isLong
           ? price * this.config.TRAILING_TAKE_PROFIT
-          : price * (2 - this.config.TRAILING_TAKE_PROFIT), // معكوس للـ SHORT
+          : price / this.config.TRAILING_TAKE_PROFIT,
 
       confidence: parseFloat(analysis.confidence),
       signals: analysis.signals,
@@ -77,18 +82,19 @@ class TradeManager {
     let shouldClose = false;
     let exitPrice = currentPrice;
     let reason = "";
-    const side = trade.side || "BUY"; // طريقة الدفاع
+    const side = trade.side || "BUY";
+    const isLong = side === "BUY" || side === "LONG";
+    const isShort = side === "SELL" || side === "SHORT";
 
     // ========== LONG TRADES (BUY) ==========
-    if (side === "BUY") {
+    if (isLong) {
       // تحديث الأسعار العليا للـ LONG
       if (currentPrice > trade.highestPrice) {
         trade.highestPrice = currentPrice;
       }
 
       // Trailing Stop Loss - يتحرك للأعلى فقط
-      const newTrailingStop =
-        trade.highestPrice * (1 - (this.config.TRAILING_STOP_LOSS - 1));
+      const newTrailingStop = trade.highestPrice * this.config.TRAILING_STOP_LOSS;
       if (newTrailingStop > trade.trailingStopPrice) {
         trade.trailingStopPrice = newTrailingStop;
       }
@@ -122,8 +128,7 @@ class TradeManager {
       }
 
       // Trailing Stop Loss - يتحرك للأسفل فقط
-      const newTrailingStop =
-        trade.lowestPrice * (1 + (this.config.TRAILING_STOP_LOSS - 1));
+      const newTrailingStop = trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
       if (newTrailingStop < trade.trailingStopPrice) {
         trade.trailingStopPrice = newTrailingStop;
       }
@@ -167,6 +172,8 @@ class TradeManager {
    */
   closeTrade(trade, exitPrice, reason) {
     const side = trade.side || "BUY";
+    const isLong = side === "BUY" || side === "LONG";
+    const isShort = side === "SELL" || side === "SHORT";
 
     // ✅ الرسوم حسب نوع التداول:
     // Futures: 0.02% maker + 0.04% taker = ~0.06% total (نستخدم taker للأمان)
@@ -177,7 +184,7 @@ class TradeManager {
     let profitPercent, effectiveExitPrice;
 
     // ========== LONG TRADES ==========
-    if (side === "BUY") {
+    if (isLong) {
       // ✅ الربح = (سعر الخروج - سعر الدخول) * الكمية - الرسوم
       const grossProfit =
         ((exitPrice - trade.entryPrice) / trade.entryPrice) *

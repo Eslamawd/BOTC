@@ -65,7 +65,13 @@ const CONFIG = {
   VOLUME_RATIO_MIN: 1.2, // ⬇️ خفضنا من 2.0 لـ 1.2
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
-  MODE: process.env.MODE || "PAPER", // Default = PAPER (آمن)
+  // PAPER = backtest على شموع قديمة
+  // LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
+  // REAL = تداول حقيقي بأوامر فعلية
+  MODE: process.env.MODE || "LIVE_PAPER", // Default = LIVE_PAPER (آمن + حقيقي)
+  
+  // ⏱️ فترة التحديث للوضع Live (بالثواني)
+  LIVE_UPDATE_INTERVAL: 60, // كل 60 ثانية (1 دقيقة)
 
   // 📲 Telegram
   ENABLE_TELEGRAM: true,
@@ -76,11 +82,11 @@ class AdvancedTradingAI {
   constructor(config) {
     this.config = config;
     // اقرأ MODE من environment variable (يسمح pm2 بتغييره)
-    this.mode = process.env.MODE || config.MODE || "PAPER";
+    this.mode = process.env.MODE || config.MODE || "LIVE_PAPER";
     console.log(`📋 Operating Mode: ${this.mode}`);
 
     // Exchange (Binance)
-    // في PAPER mode: نستخدم API بدون authentication (public endpoints)
+    // في PAPER/LIVE_PAPER: نستخدم API بدون authentication (public endpoints)
     // في REAL mode: نستخدم API keys من .env
     this.exchange = new ccxt.binance({
       apiKey: this.mode === "REAL" ? process.env.BINANCE_API_KEY || "" : "",
@@ -446,6 +452,189 @@ class AdvancedTradingAI {
   }
 
   /**
+   * 🔴 LIVE Mode - تداول حقيقي بأسعار live (LIVE_PAPER أو REAL)
+   */
+  async runLiveMode() {
+    console.log("🚀 Starting live trading loop...");
+    console.log(`⏱️  Update interval: ${this.config.LIVE_UPDATE_INTERVAL}s\n`);
+
+    let iteration = 0;
+    const updateInterval = this.config.LIVE_UPDATE_INTERVAL * 1000; // تحويل لميلي ثانية
+
+    // Loop مستمر للتداول الحقيقي
+    while (true) {
+      iteration++;
+      const timestamp = Date.now();
+      
+      console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      console.log(`🔄 Iteration #${iteration} | ${new Date().toLocaleString()}`);
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+      // تحليل كل رمز بشكل متوازي
+      await Promise.all(
+        this.config.SYMBOLS.map((symbol) => this.analyzeLiveSymbol(symbol, timestamp))
+      );
+
+      // عرض ملخص سريع
+      console.log(`\n💰 Balance: $${this.balance.toFixed(2)} | Active Trades: ${this.allTrades.filter(t => t.status === 'OPEN').length}`);
+
+      // انتظار قبل التكرار التالي
+      console.log(`⏸️  Waiting ${this.config.LIVE_UPDATE_INTERVAL}s until next update...\n`);
+      await new Promise(resolve => setTimeout(resolve, updateInterval));
+    }
+  }
+
+  /**
+   * 🔍 تحليل رمز واحد في LIVE Mode
+   */
+  async analyzeLiveSymbol(symbol, timestamp) {
+    try {
+      // 1️⃣ جلب السعر الحالي (live price)
+      const ticker = await this.exchange.fetchTicker(symbol);
+      const currentPrice = ticker.last;
+      
+      console.log(`📊 [${symbol}] Current Price: $${currentPrice.toFixed(2)}`);
+
+      // 2️⃣ جلب شموع للتحليل (آخر 200 شمعة فقط)
+      const candles1h = await this.exchange.fetchOHLCV(symbol, this.config.TIMEFRAME_TREND, undefined, 200);
+      const candles15m = await this.exchange.fetchOHLCV(symbol, this.config.TIMEFRAME_ENTRY, undefined, 200);
+
+      if (!candles1h || !candles15m || candles1h.length < 100 || candles15m.length < 100) {
+        console.log(`⚠️  [${symbol}] Insufficient data, skipping...`);
+        return;
+      }
+
+      // 3️⃣ Order Book من WebSocket
+      const wsOrderBook = this.orderBookWs?.getOrderBook(symbol) || null;
+      if (wsOrderBook) {
+        this.orderBooks[symbol] = wsOrderBook;
+        this.symbolData[symbol].orderBook = wsOrderBook;
+      }
+
+      // 4️⃣ تحديث الصفقات القائمة (Trailing SL/TP)
+      const activeTrades = this.symbolData[symbol]?.activeTrades || [];
+      const tradesToKeep = [];
+      
+      for (const trade of activeTrades) {
+        const { shouldClose, exitPrice, reason } = 
+          this.tradeManager.updateTradeTrailing(trade, currentPrice, timestamp);
+
+        if (shouldClose) {
+          await this.closeTrade(symbol, trade, exitPrice, reason);
+        } else {
+          tradesToKeep.push(trade);
+        }
+      }
+      
+      if (!this.symbolData[symbol]) {
+        this.symbolData[symbol] = {
+          activeTrades: [],
+          completedTrades: [],
+          dailyProfit: 0,
+        };
+      }
+      this.symbolData[symbol].activeTrades = tradesToKeep;
+
+      // 5️⃣ تحليل multi-timeframe
+      const trend1h = await this.analyzer.analyze(candles1h, symbol);
+      const entry15m = await this.analyzer.analyze(candles15m, symbol);
+
+      const trendSide = trend1h?.side || "HOLD";
+      const trendConf = Number(trend1h?.confidence || 0);
+      const entrySide = entry15m?.side || "HOLD";
+      const entryConf = Number(entry15m?.confidence || 0);
+
+      console.log(`   🕐 1h Trend: ${trendSide} (${trendConf.toFixed(1)}%)`);
+      console.log(`   🕒 15m Entry: ${entrySide} (${entryConf.toFixed(1)}%)`);
+
+      // تحديث live status
+      this.liveStatus.lastAnalysis[symbol] = Date.now();
+      this.liveStatus.lastSignal[symbol] = {
+        trendSide,
+        trendConf,
+        entrySide,
+        entryConf,
+        status: "analyzed",
+        updatedAt: Date.now(),
+      };
+
+      // 6️⃣ فتح صفقة جديدة (إذا كانت الشروط مستوفاة)
+      const maxTrades = this.config.MAX_CONCURRENT_TRADES_PER_SYMBOL;
+      if (this.symbolData[symbol].activeTrades.length < maxTrades) {
+        let shouldEnter = false;
+        let finalSignal = null;
+
+        // التحقق من توافق الإطارين الزمنيين
+        if (this.config.REQUIRE_TREND_CONFIRMATION) {
+          if (trend1h?.side === "LONG" && entry15m?.shouldBuy) {
+            shouldEnter = true;
+            finalSignal = "BUY";
+          } else if (trend1h?.side === "SHORT" && entry15m?.shouldSell) {
+            shouldEnter = true;
+            finalSignal = "SELL";
+          }
+        } else {
+          if (entry15m?.shouldBuy) {
+            shouldEnter = true;
+            finalSignal = "BUY";
+          } else if (entry15m?.shouldSell) {
+            shouldEnter = true;
+            finalSignal = "SELL";
+          }
+        }
+
+        if (shouldEnter && finalSignal) {
+          const analysis = entry15m;
+          analysis.side = finalSignal === "BUY" ? "LONG" : "SHORT";
+
+          const trade = this.tradeManager.openTrade(
+            symbol,
+            currentPrice, // ← السعر الحقيقي الحالي!
+            analysis,
+            this.balance,
+            this.symbolData[symbol].activeTrades.length
+          );
+
+          if (trade) {
+            this.symbolData[symbol].activeTrades.push(trade);
+            this.balance -= trade.positionSize;
+
+            const emoji = finalSignal === "BUY" ? "🟢" : "🔴";
+            const action = finalSignal === "BUY" ? "BUY" : "SELL";
+
+            console.log(
+              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${trendSide} | 15m: ${entrySide} | Conf: ${analysis.confidence}%`
+            );
+
+            // حفظ في Database
+            if (this.database && this.database.initialized) {
+              try {
+                await this.database.saveTrade({
+                  symbol: trade.symbol,
+                  side: trade.side,
+                  entryPrice: trade.entryPrice,
+                  quantity: trade.quantity,
+                  stopLoss: trade.stopLoss,
+                  takeProfit: trade.takeProfit,
+                  confidence: trade.confidence,
+                  analysisId: analysis.analysisId,
+                  status: "OPEN",
+                });
+              } catch (dbError) {
+                console.warn(`⚠️ Database save error: ${dbError.message}`);
+              }
+            }
+
+            await this.notifyTelegramEntry(trade, analysis);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`❌ [${symbol}] Error in live analysis:`, error.message);
+    }
+  }
+
+  /**
    * 🏁 إغلاق صفقة
    */
   async closeTrade(symbol, trade, exitPrice, reason) {
@@ -652,6 +841,28 @@ class AdvancedTradingAI {
     console.log(`🎯 Mode: ${this.config.MODE}`);
     console.log(`📈 Min Confidence: ${this.config.MIN_CONFIDENCE}%\n`);
 
+    // ⚠️ تحذير هام للـ PAPER mode
+    if (this.mode === "PAPER") {
+      console.log("⚠️  ======================================");
+      console.log("⚠️  PAPER MODE يستخدم بيانات تاريخية فقط!");
+      console.log("⚠️  الأسعار هنا ليست حقيقية (من candles قديمة)");
+      console.log("⚠️  للتداول التجريبي بأسعار حقيقية: MODE=LIVE_PAPER");
+      console.log("⚠️  للتداول الحقيقي: MODE=REAL");
+      console.log("⚠️  ======================================\n");
+    } else if (this.mode === "LIVE_PAPER") {
+      console.log("✅  ======================================");
+      console.log("✅  LIVE_PAPER MODE: تداول تجريبي بأسعار حقيقية!");
+      console.log("✅  الأسعار من Binance مباشرة (real-time)");
+      console.log("✅  الصفقات simulation فقط (آمن - لا تنفيذ فعلي)");
+      console.log("✅  ======================================\n");
+    } else if (this.mode === "REAL") {
+      console.log("🚨  ======================================");
+      console.log("🚨  REAL MODE: تداول حقيقي بأموال فعلية!");
+      console.log("🚨  الأوامر تُنفذ على Binance فعلياً");
+      console.log("🚨  رصيدك الحقيقي معرض للربح/الخسارة");
+      console.log("🚨  ======================================\n");
+    }
+
     // 💾 تهيئة Database
     console.log("💾 Initializing Database...");
     await this.database.initialize();
@@ -711,9 +922,19 @@ class AdvancedTradingAI {
       setInterval(() => this.sendLiveReport(), reportIntervalMs);
       await this.sendLiveReport();
     }
-    await Promise.all(
-      this.config.SYMBOLS.map((symbol) => this.runSymbol(symbol)),
-    );
+
+    // 🔀 اختيار الوضع المناسب
+    if (this.mode === "LIVE_PAPER" || this.mode === "REAL") {
+      // 🔴 LIVE Mode: تداول حقيقي بأسعار live (real-time)
+      console.log("🔴 Starting LIVE Trading Mode (real-time prices)...\n");
+      await this.runLiveMode();
+    } else {
+      // 📝 PAPER Mode: backtest على شموع تاريخية
+      console.log("📝 Starting PAPER Mode (historical backtest)...\n");
+      await Promise.all(
+        this.config.SYMBOLS.map((symbol) => this.runSymbol(symbol)),
+      );
+    }
 
     // عرض النتائج
     this.portfolioManager.displaySummary(
