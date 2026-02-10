@@ -1,0 +1,65 @@
+{
+  "balance": 100.29159425852696,
+  "totalTrades": 2,
+  "wins": 2,
+  "losses": 0,
+  "netProfit": 0.2915942585269562,
+  "trades": [
+    {
+      "id": "TRADE_1770727952449_qgjfe5cwf",
+      "symbol": "BTC/USDT",
+      "side": "SHORT",
+      "entryPrice": 75894.15,
+      "entryTime": 1770727952449,
+      "positionSize": 2.5,
+      "quantity": 0.000032940615317517885,
+      "highestPrice": 75894.15,
+      "lowestPrice": 75894.15,
+      "stopLoss": 71340.50099999999,
+      "trailingStopPrice": 71340.50099999999,
+      "takeProfit": 69822.61799999999,
+      "trailingTPPrice": 69822.61799999999,
+      "confidence": 31.6,
+      "signals": [
+        "Order Book يميل لـ SHORT"
+      ],
+      "status": "CLOSED",
+      "exitPrice": 71340.50099999999,
+      "effectiveExitPrice": 71340.50099999999,
+      "exitReason": "TRAILING_SL",
+      "profitPercent": 5.800000000000007,
+      "pnl": 0.14500000000000018,
+      "feesDeducted": 0.005,
+      "highestReached": 75894.15,
+      "lowestReached": 75894.15
+    },
+    {
+      "id": "TRADE_1770727952451_995ml4v0y",
+      "symbol": "ETH/USDT",
+      "side": "SHORT",
+      "entryPrice": 2240.54,
+      "entryTime": 1770727952451,
+      "positionSize": 2.5,
+      "quantity": 0.0011158024404830979,
+      "highestPrice": 2240.54,
+      "lowestPrice": 2239.02,
+      "stopLoss": 2106.1076,
+      "trailingStopPrice": 2104.6787999999997,
+      "takeProfit": 2061.2967999999996,
+      "trailingTPPrice": 2061.2967999999996,
+      "confidence": 26.6,
+      "signals": [
+        "Order Book يميل لـ SHORT"
+      ],
+      "status": "CLOSED",
+      "exitPrice": 2104.6787999999997,
+      "effectiveExitPrice": 2104.6787999999997,
+      "exitReason": "TRAILING_SL",
+      "profitPercent": 5.863770341078502,
+      "pnl": 0.14659425852696256,
+      "feesDeducted": 0.005,
+      "highestReached": 2240.54,
+      "lowestReached": 2239.02
+    }
+  ]
+}
