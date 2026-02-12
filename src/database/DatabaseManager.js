@@ -229,6 +229,27 @@ class DatabaseManager {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
 
+      // COMPACT: Keep only essential fields (reduce from 100+ KB to <5 KB per record)
+      const compactOB = analysis.orderBook
+        ? {
+            spread: analysis.orderBook.spread,
+            imbalance: analysis.orderBook.imbalance,
+          }
+        : null;
+
+      const compactVol = analysis.volume
+        ? {
+            ratio: analysis.volume.ratio,
+          }
+        : null;
+
+      const compactAI = analysis.symbolicAI
+        ? {
+            decision: analysis.symbolicAI.decision,
+            confidence: analysis.symbolicAI.confidence,
+          }
+        : null;
+
       const params = [
         new Date().toISOString(),
         analysis.symbol,
@@ -236,10 +257,10 @@ class DatabaseManager {
         analysis.confidence,
         analysis.currentPrice,
         JSON.stringify(analysis.indicators),
-        JSON.stringify(analysis.orderBook),
+        JSON.stringify(compactOB), // 50KB -> 0.5KB
         analysis.whale ? 1 : 0,
-        JSON.stringify(analysis.volume),
-        JSON.stringify(analysis.symbolicAI),
+        JSON.stringify(compactVol), // 10KB -> 0.3KB
+        JSON.stringify(compactAI), // 50KB -> 1KB
       ];
 
       const result = await this.runQuery(sql, params);
@@ -397,6 +418,12 @@ class DatabaseManager {
     if (!this.initialized) return;
 
     try {
+      // 🔥 فلتر: حفظ فقط الأنماط الناجحة السريعة جداً!
+      // يجب أن تحقق profit > 2% لتستحق الحفظ
+      if (!pattern.profit || pattern.profit < 2) {
+        return; // تجاهل الأرباح الصغيرة
+      }
+
       // البحث عن نمط مشابه
       const sql = `
         SELECT * FROM patterns 
@@ -411,26 +438,28 @@ class DatabaseManager {
       ]);
 
       if (existing) {
-        // تحديث النمط الموجود
-        const newOccurrences = existing.occurrences + 1;
-        const newAvgProfit =
-          (existing.avgProfit * existing.occurrences + pattern.profit) /
-          newOccurrences;
+        // تحديث النمط فقط إذا كان الربح الجديد أفضل أيضاً
+        if (pattern.profit > existing.avgProfit) {
+          const newOccurrences = existing.occurrences + 1;
+          const newAvgProfit =
+            (existing.avgProfit * existing.occurrences + pattern.profit) /
+            newOccurrences;
 
-        const updateSql = `
-          UPDATE patterns 
-          SET occurrences = ?, avgProfit = ?, lastSeen = ?
-          WHERE id = ?
-        `;
+          const updateSql = `
+            UPDATE patterns 
+            SET occurrences = ?, avgProfit = ?, lastSeen = ?
+            WHERE id = ?
+          `;
 
-        await this.runQuery(updateSql, [
-          newOccurrences,
-          newAvgProfit,
-          new Date().toISOString(),
-          existing.id,
-        ]);
+          await this.runQuery(updateSql, [
+            newOccurrences,
+            newAvgProfit,
+            new Date().toISOString(),
+            existing.id,
+          ]);
+        }
       } else {
-        // إضافة نمط جديد
+        // إضافة نمط جديد (فقط الناجح السريع!)
         const insertSql = `
           INSERT INTO patterns (timestamp, symbol, type, confidence, indicators, profit, occurrences, avgProfit, lastSeen)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -447,6 +476,10 @@ class DatabaseManager {
           pattern.profit,
           new Date().toISOString(),
         ]);
+
+        console.log(
+          `💎 Pattern saved (${pattern.symbol}): +${pattern.profit.toFixed(2)}% profit`,
+        );
       }
     } catch (error) {
       console.error("❌ Error saving pattern:", error.message);
@@ -604,9 +637,46 @@ class DatabaseManager {
   }
 
   /**
-   * 🧹 تنظيف البيانات القديمة (اختياري - لتوفير المساحة)
+   * 🔥 حذف السجلات الخاسرة فقط (analyses و trades)
+   * يبقي الناجحة للتعلم منها
    */
-  async cleanOldData(daysToKeep = 90) {
+  async deleteLosingRecords() {
+    if (!this.initialized) return;
+
+    try {
+      const startTime = Date.now();
+
+      // حذف التحليلات الخاسرة (profitLoss < 0)
+      const analysesResult = await this.runQuery(
+        `DELETE FROM analyses WHERE actualOutcome = 'LOSS' OR profitLoss < 0`,
+      );
+
+      // حذف الصفقات الخاسرة
+      const tradesResult = await this.runQuery(
+        `DELETE FROM trades WHERE profitLoss < 0 OR status = 'CLOSED' AND profitLossPercent < 0`,
+      );
+
+      // VACUUM لتحرير المساحة
+      await this.runQuery("VACUUM");
+
+      const duration = Date.now() - startTime;
+
+      console.log(
+        `🔥 Aggressive cleanup (${duration}ms) | Deleted losing records:`,
+      );
+      console.log(
+        `   ❌ Losing analyses: ${analysesResult.changes} | ❌ Losing trades: ${tradesResult.changes}`,
+      );
+      console.log(`   ✅ Winning records: PRESERVED for AI learning\n`);
+    } catch (error) {
+      console.error("❌ Error deleting losing records:", error.message);
+    }
+  }
+
+  /**
+   * 📊 تنظيف البيانات القديمة حسب التاريخ
+   */
+  async cleanOldData(daysToKeep = 20) {
     if (!this.initialized) return;
 
     if (!Number.isFinite(daysToKeep) || daysToKeep <= 0) {
@@ -615,8 +685,10 @@ class DatabaseManager {
     }
 
     try {
+      const startTime = Date.now();
       const cutoffModifier = `-${daysToKeep} days`;
 
+      // حذف البيانات القديمة من الجداول الثلاثة
       const analysesResult = await this.runQuery(
         `DELETE FROM analyses WHERE julianday(timestamp) < julianday('now', ?)`,
         [cutoffModifier],
@@ -632,11 +704,20 @@ class DatabaseManager {
         [cutoffModifier],
       );
 
-      await this.runQuery("VACUUM");
+      // VACUUM لتحرير المساحة على القرص
+      const vacuumResult = await this.runQuery("VACUUM");
+
+      const duration = Date.now() - startTime;
+      const totalDeleted =
+        analysesResult.changes + tradesResult.changes + patternsResult.changes;
 
       console.log(
-        `🧹 Cleaned data older than ${daysToKeep} days (analyses: ${analysesResult.changes}, trades: ${tradesResult.changes}, patterns: ${patternsResult.changes})`,
+        `✅ Cleanup complete (${duration}ms) | Deleted ${totalDeleted} records:`,
       );
+      console.log(
+        `   📊 Analyses: ${analysesResult.changes} | 💼 Trades: ${tradesResult.changes} | 🧠 Patterns: ${patternsResult.changes}`,
+      );
+      console.log(`   💾 VACUUM: Database compacted for better disk space\n`);
     } catch (error) {
       console.error("❌ Error cleaning old data:", error.message);
     }

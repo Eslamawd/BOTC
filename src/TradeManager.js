@@ -50,16 +50,16 @@ class TradeManager {
 
       // ✅ Stop Loss: LONG = تحت السعر، SHORT = فوق السعر
       stopLoss: isLong
-        ? price * this.config.TRAILING_STOP_LOSS // 0.94 = -6%
-        : price / this.config.TRAILING_STOP_LOSS, // 1/0.94 = +6%
+        ? price * this.config.TRAILING_STOP_LOSS // 0.98 = -2%
+        : price / this.config.TRAILING_STOP_LOSS, // 1/0.98 = +2%
       trailingStopPrice: isLong
         ? price * this.config.TRAILING_STOP_LOSS
         : price / this.config.TRAILING_STOP_LOSS,
 
       // ✅ Take Profit: LONG = فوق السعر، SHORT = تحت السعر
       takeProfit: isLong
-        ? price * this.config.TRAILING_TAKE_PROFIT // 1.12 = +12%
-        : price / this.config.TRAILING_TAKE_PROFIT, // 1/1.12 = -12%
+        ? price * this.config.TRAILING_TAKE_PROFIT // 1.03 = +3%
+        : price / this.config.TRAILING_TAKE_PROFIT, // 1/1.03 = -3%
       trailingTPPrice: isLong
         ? price * this.config.TRAILING_TAKE_PROFIT
         : price / this.config.TRAILING_TAKE_PROFIT,
@@ -67,6 +67,7 @@ class TradeManager {
       confidence: parseFloat(analysis.confidence),
       signals: analysis.signals,
       status: "OPEN",
+      hitMinProfit: false, // 🔥 هل وصل للـ min profit ليدخل unlimited mode?
     };
   }
 
@@ -105,14 +106,31 @@ class TradeManager {
       const profitPercent =
         ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
 
-      if (profitPercent >= 10 && currentPrice > trade.trailingTPPrice * 1.002) {
-        trade.trailingTPPrice = currentPrice * (1 - this.config.TRAILING_STEP);
+      // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
+      if (
+        this.config.USE_UNLIMITED_PROFIT &&
+        profitPercent >= 3 &&
+        !trade.hitMinProfit
+      ) {
+        trade.hitMinProfit = true;
+        // نزيل الـ TP، الآن الـ SL فقط سيغلق الصفقة
       }
 
-      if (currentPrice >= trade.trailingTPPrice && profitPercent >= 5) {
-        shouldClose = true;
-        exitPrice = trade.trailingTPPrice;
-        reason = "TRAILING_TP";
+      // إذا في unlimited mode و valid takeProfit بدون hitting min profit
+      if (!trade.hitMinProfit) {
+        if (
+          profitPercent >= 10 &&
+          currentPrice > trade.trailingTPPrice * 1.002
+        ) {
+          trade.trailingTPPrice =
+            currentPrice * (1 - this.config.TRAILING_STEP);
+        }
+
+        if (currentPrice >= trade.trailingTPPrice && profitPercent >= 5) {
+          shouldClose = true;
+          exitPrice = trade.trailingTPPrice;
+          reason = "TRAILING_TP";
+        }
       }
     }
 
@@ -140,14 +158,31 @@ class TradeManager {
       const profitPercent =
         ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
 
-      if (profitPercent >= 10 && currentPrice < trade.trailingTPPrice * 0.998) {
-        trade.trailingTPPrice = currentPrice * (1 + this.config.TRAILING_STEP);
+      // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
+      if (
+        this.config.USE_UNLIMITED_PROFIT &&
+        profitPercent >= 3 &&
+        !trade.hitMinProfit
+      ) {
+        trade.hitMinProfit = true;
+        // نزيل الـ TP، الآن الـ SL فقط سيغلق الصفقة
       }
 
-      if (currentPrice <= trade.trailingTPPrice && profitPercent >= 5) {
-        shouldClose = true;
-        exitPrice = trade.trailingTPPrice;
-        reason = "TRAILING_TP";
+      // إذا في unlimited mode و valid takeProfit بدون hitting min profit
+      if (!trade.hitMinProfit) {
+        if (
+          profitPercent >= 10 &&
+          currentPrice < trade.trailingTPPrice * 0.998
+        ) {
+          trade.trailingTPPrice =
+            currentPrice * (1 + this.config.TRAILING_STEP);
+        }
+
+        if (currentPrice <= trade.trailingTPPrice && profitPercent >= 5) {
+          shouldClose = true;
+          exitPrice = trade.trailingTPPrice;
+          reason = "TRAILING_TP";
+        }
       }
     }
 

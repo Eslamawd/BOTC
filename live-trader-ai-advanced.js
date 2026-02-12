@@ -38,10 +38,11 @@ const CONFIG = {
   TRADING_TYPE: process.env.TRADING_TYPE || "futures", // 'spot' or 'futures'
   LEVERAGE: parseInt(process.env.LEVERAGE) || 5, // رافعة مالية (Futures فقط)
 
-  // 📊 Trailing Mechanism - تعديل أكثر تساهلاً
-  TRAILING_STOP_LOSS: 0.94, // -6% بدل -2%
-  TRAILING_TAKE_PROFIT: 1.08, // +8% بدل +5%
-  TRAILING_STEP: 0.003,
+  // 📊 Trailing Mechanism - TIGHT (للأرباح السريعة)
+  TRAILING_STOP_LOSS: 0.98, // -2% (خسارة محدودة)
+  TRAILING_TAKE_PROFIT: 1.03, // +3% (initial min profit before unlimited)
+  TRAILING_STEP: 0.001,
+  USE_UNLIMITED_PROFIT: true, // 🔥 UNLIMITED PROFIT MODE: استمر مع الترند بعد +3%!
 
   // 🎯 خيارات إضافية للـ Advanced AI
   USE_ORDER_BOOK_ANALYSIS: true, // ✅ استخدم Order Book
@@ -159,6 +160,7 @@ class AdvancedTradingAI {
       startedAt: Date.now(),
       lastAnalysis: {},
       lastSignal: {},
+      lastCleanup: Date.now(), // ⏱️ آخر وقت تنظيف
     };
 
     config.SYMBOLS.forEach((symbol) => this.ensureSymbolData(symbol));
@@ -185,6 +187,7 @@ class AdvancedTradingAI {
 
     let iteration = 0;
     const updateInterval = this.config.LIVE_UPDATE_INTERVAL * 1000; // تحويل لميلي ثانية
+    const CLEANUP_INTERVAL_MS = 3 * 60 * 1000; // 🔥 تنظيف كل 3 دقائق (تجاهل الخاسرة فقط!)
 
     // Loop مستمر للتداول الحقيقي
     while (true) {
@@ -196,6 +199,22 @@ class AdvancedTradingAI {
         `🔄 Iteration #${iteration} | ${new Date().toLocaleString()}`,
       );
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+      // 🧹 تنظيف دوري كل 3 دقائق (حذف الخاسرة فقط!)
+      if (timestamp - this.liveStatus.lastCleanup > CLEANUP_INTERVAL_MS) {
+        console.log(`🔥 Aggressive cleanup triggered (3 mins)...`);
+        try {
+          // 1️⃣ حذف السجلات الخاسرة فقط (الناجحة تبقى للتعلم)
+          await this.database.deleteLosingRecords();
+
+          // 2️⃣ تنظيف البيانات القديمة (كل 20 يوم)
+          await this.database.cleanOldData(this.config.DATA_RETENTION_DAYS);
+
+          this.liveStatus.lastCleanup = timestamp;
+        } catch (error) {
+          console.error("❌ Cleanup error:", error.message);
+        }
+      }
 
       // تحليل كل رمز بشكل متوازي
       await Promise.all(
