@@ -84,27 +84,32 @@ class TradeManager {
 
     // ========== LONG TRADES (BUY) ==========
     if (isLong) {
+      // حساب الربح الحالي
+      const profitPercent =
+        ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
+
       // تحديث الأسعار العليا للـ LONG
       if (currentPrice > trade.highestPrice) {
         trade.highestPrice = currentPrice;
       }
 
-      // Trailing Stop Loss - يتحرك للأعلى فقط
-      const newTrailingStop =
-        trade.highestPrice * this.config.TRAILING_STOP_LOSS;
-      if (newTrailingStop > trade.trailingStopPrice) {
-        trade.trailingStopPrice = newTrailingStop;
+      // ✅ SAFETY NET: ما نبدأ trailing السل حتى الصفقة تربح +1%
+      // (يعطي الصفقة وقت آمن للصعود قبل الحماية)
+      if (profitPercent >= 1) {
+        // Trailing Stop Loss - يتحرك للأعلى فقط
+        const newTrailingStop =
+          trade.highestPrice * this.config.TRAILING_STOP_LOSS;
+        if (newTrailingStop > trade.trailingStopPrice) {
+          trade.trailingStopPrice = newTrailingStop;
+        }
       }
 
-      if (currentPrice <= trade.trailingStopPrice) {
+      // تفعيل الإغلاق بناءً على الترايلينج (فقط بعد +1%)
+      if (profitPercent >= 1 && currentPrice <= trade.trailingStopPrice) {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
         reason = "TRAILING_SL";
       }
-
-      // Trailing Take Profit
-      const profitPercent =
-        ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
 
       // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
       if (
@@ -136,27 +141,30 @@ class TradeManager {
 
     // ========== SHORT TRADES (SELL) ==========
     else {
+      // حساب الربح الحالي (للـ SHORT: entry - current)
+      const profitPercent =
+        ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
+
       // تحديث الأسعار الدنيا للـ SHORT
       if (currentPrice < trade.lowestPrice) {
         trade.lowestPrice = currentPrice;
       }
 
-      // Trailing Stop Loss - يتحرك للأسفل فقط
-      const newTrailingStop =
-        trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
-      if (newTrailingStop < trade.trailingStopPrice) {
-        trade.trailingStopPrice = newTrailingStop;
+      // ✅ SAFETY NET: ما نبدأ trailing السل حتى الصفقة تربح +1%
+      if (profitPercent >= 1) {
+        // Trailing Stop Loss - يتحرك للأسفل فقط
+        const newTrailingStop =
+          trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
+        if (newTrailingStop < trade.trailingStopPrice) {
+          trade.trailingStopPrice = newTrailingStop;
+        }
       }
 
-      if (currentPrice >= trade.trailingStopPrice) {
+      // تفعيل الإغلاق بناءً على الترايلينج (فقط بعد +1%)
+      if (profitPercent >= 1 && currentPrice >= trade.trailingStopPrice) {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
         reason = "TRAILING_SL";
-      }
-
-      // Trailing Take Profit (للـ SHORT يكون أسفل)
-      const profitPercent =
-        ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
 
       // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
       if (

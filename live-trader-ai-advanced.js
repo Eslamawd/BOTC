@@ -38,8 +38,8 @@ const CONFIG = {
   TRADING_TYPE: process.env.TRADING_TYPE || "futures", // 'spot' or 'futures'
   LEVERAGE: parseInt(process.env.LEVERAGE) || 5, // رافعة مالية (Futures فقط)
 
-  // 📊 Trailing Mechanism - TIGHT (للأرباح السريعة)
-  TRAILING_STOP_LOSS: 0.98, // -2% (خسارة محدودة)
+  // 📊 Trailing Mechanism - RELAXED (لتعطي الصفقات وقت للصعود)
+  TRAILING_STOP_LOSS: 0.95, // -5% (كان -2% محكم جداً)
   TRAILING_TAKE_PROFIT: 1.03, // +3% (initial min profit before unlimited)
   TRAILING_STEP: 0.001,
   USE_UNLIMITED_PROFIT: true, // 🔥 UNLIMITED PROFIT MODE: استمر مع الترند بعد +3%!
@@ -71,7 +71,7 @@ const CONFIG = {
   MODE: process.env.MODE || "LIVE_PAPER", // Default = LIVE_PAPER (آمن + حقيقي)
 
   // ⏱️ فترة التحديث للوضع Live (بالثواني)
-  LIVE_UPDATE_INTERVAL: 60, // كل 60 ثانية (1 دقيقة)
+  LIVE_UPDATE_INTERVAL: 300, // كل 300 ثانية (5 دقائق) - أطول للسماح للصفقات بالصعود
 
   // 💾 Database
   DATA_DIR: process.env.DATA_DIR || "data",
