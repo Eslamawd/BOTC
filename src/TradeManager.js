@@ -165,6 +165,7 @@ class TradeManager {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
         reason = "TRAILING_SL";
+      }
 
       // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
       if (
