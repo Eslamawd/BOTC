@@ -500,6 +500,7 @@ class AdvancedTradingAI {
           exitPrice: closedTrade.exitPrice,
           profitLoss: closedTrade.pnl,
           profitLossPercent: closedTrade.profitPercent,
+          analysisId: closedTrade.analysisId,
           closedAt: new Date().toISOString(),
           reason: reason,
         };

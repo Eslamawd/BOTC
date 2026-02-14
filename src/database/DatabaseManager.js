@@ -345,6 +345,25 @@ class DatabaseManager {
         tradeId,
       ]);
 
+      // ✅ مهم للتعلّم: تحديث نتيجة التحليل المرتبط حتى مع مسار UPDATE
+      if (result.changes > 0 && closeData.profitLoss !== null) {
+        let analysisId = closeData.analysisId || null;
+
+        if (!analysisId) {
+          const row = await this.getQuery(
+            `SELECT analysisId FROM trades WHERE id = ?`,
+            [tradeId],
+          );
+          analysisId = row?.analysisId || null;
+        }
+
+        if (analysisId) {
+          await this.updateAnalysisOutcome(analysisId, {
+            profitLoss: closeData.profitLoss,
+          });
+        }
+      }
+
       return result.changes > 0;
     } catch (error) {
       console.error("❌ Error closing trade record:", error.message);
