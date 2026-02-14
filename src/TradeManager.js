@@ -63,6 +63,125 @@ class TradeManager {
     return Math.round(dynamicHours * 100) / 100;
   }
 
+  getAtrValue(analysis, price) {
+    const atr = Number(analysis?.indicators?.atr);
+    if (Number.isFinite(atr) && atr > 0) return atr;
+    return price * 0.005;
+  }
+
+  findOrderBookWalls(orderBook, currentPrice) {
+    if (!orderBook) return null;
+
+    if (
+      Array.isArray(orderBook.bids) &&
+      Array.isArray(orderBook.asks) &&
+      orderBook.bids.length > 0 &&
+      orderBook.asks.length > 0
+    ) {
+      const normalizeLevel = (level) => [Number(level[0]), Number(level[1])];
+      const bids = orderBook.bids.slice(0, 20).map(normalizeLevel);
+      const asks = orderBook.asks.slice(0, 20).map(normalizeLevel);
+
+      const findWall = (levels, direction) => {
+        if (!levels.length) return null;
+        const avgSize =
+          levels.reduce((sum, level) => sum + level[1], 0) / levels.length;
+        const threshold = avgSize * 2;
+        const walls = levels.filter((level) => level[1] >= threshold);
+        if (!walls.length) return null;
+
+        if (direction === "above") {
+          return walls
+            .filter((level) => level[0] >= currentPrice)
+            .reduce(
+              (closest, level) =>
+                !closest || level[0] < closest[0] ? level : closest,
+              null,
+            );
+        }
+
+        return walls
+          .filter((level) => level[0] <= currentPrice)
+          .reduce(
+            (closest, level) =>
+              !closest || level[0] > closest[0] ? level : closest,
+            null,
+          );
+      };
+
+      const support = findWall(bids, "below");
+      const resistance = findWall(asks, "above");
+
+      return {
+        support: support ? support[0] : null,
+        resistance: resistance ? resistance[0] : null,
+      };
+    }
+
+    if (orderBook.bidLevel || orderBook.askLevel) {
+      return {
+        support: orderBook.bidLevel || null,
+        resistance: orderBook.askLevel || null,
+      };
+    }
+
+    return null;
+  }
+
+  calculateSmartLevels(entryPrice, analysis, side) {
+    const isLong = isLongSignal(side);
+    const atr = this.getAtrValue(analysis, entryPrice);
+
+    const baseTakeProfit = isLong
+      ? entryPrice + atr * 2.0
+      : entryPrice - atr * 2.0;
+    const baseStopLoss = isLong
+      ? entryPrice - atr * 1.2
+      : entryPrice + atr * 1.2;
+
+    const orderBook = analysis?.orderBook || analysis?._rawData?.orderBook;
+    const walls = this.findOrderBookWalls(orderBook, entryPrice);
+    const buffer = 0.001;
+
+    let takeProfit = baseTakeProfit;
+    let stopLoss = baseStopLoss;
+
+    if (walls) {
+      if (isLong) {
+        if (walls.resistance && walls.resistance > entryPrice) {
+          takeProfit = Math.min(takeProfit, walls.resistance * (1 - buffer));
+        }
+        if (walls.support && walls.support < entryPrice) {
+          stopLoss = Math.max(stopLoss, walls.support * (1 - buffer));
+        }
+      } else {
+        if (walls.support && walls.support < entryPrice) {
+          takeProfit = Math.max(takeProfit, walls.support * (1 + buffer));
+        }
+        if (walls.resistance && walls.resistance > entryPrice) {
+          stopLoss = Math.min(stopLoss, walls.resistance * (1 + buffer));
+        }
+      }
+    }
+
+    if (isLong) {
+      if (takeProfit <= entryPrice) takeProfit = entryPrice + atr * 0.5;
+      if (stopLoss >= entryPrice) stopLoss = entryPrice - atr * 0.5;
+    } else {
+      if (takeProfit >= entryPrice) takeProfit = entryPrice - atr * 0.5;
+      if (stopLoss <= entryPrice) stopLoss = entryPrice + atr * 0.5;
+    }
+
+    return {
+      atr,
+      takeProfit,
+      stopLoss,
+      walls,
+      baseTakeProfit,
+      baseStopLoss,
+    };
+  }
+
   /**
    * فتح صفقة جديدة (LONG أو SHORT)
    */
@@ -82,8 +201,8 @@ class TradeManager {
     if (positionSize < 0.5 || balance < riskAmount * 0.5) return null;
 
     const side = analysis.side || ORDER_ACTIONS.BUY; // BUY/LONG للشراء، SELL/SHORT للبيع
-    const isLong = isLongSignal(side);
     const dynamicTimeoutHours = this.calculateDynamicTimeoutHours(analysis);
+    const smartLevels = this.calculateSmartLevels(price, analysis, side);
 
     // حساب الكمية (quantity) = positionSize / price
     const quantity = positionSize / price;
@@ -101,21 +220,15 @@ class TradeManager {
       highestPrice: price, // لـ LONG
       lowestPrice: price, // لـ SHORT
 
-      // ✅ Stop Loss: LONG = تحت السعر، SHORT = فوق السعر
-      stopLoss: isLong
-        ? price * this.config.TRAILING_STOP_LOSS // 0.98 = -2%
-        : price / this.config.TRAILING_STOP_LOSS, // 1/0.98 = +2%
-      trailingStopPrice: isLong
-        ? price * this.config.TRAILING_STOP_LOSS
-        : price / this.config.TRAILING_STOP_LOSS,
-
-      // ✅ Take Profit: LONG = فوق السعر، SHORT = تحت السعر
-      takeProfit: isLong
-        ? price * this.config.TRAILING_TAKE_PROFIT // 1.03 = +3%
-        : price / this.config.TRAILING_TAKE_PROFIT, // 1/1.03 = -3%
-      trailingTPPrice: isLong
-        ? price * this.config.TRAILING_TAKE_PROFIT
-        : price / this.config.TRAILING_TAKE_PROFIT,
+      // ✅ Smart Levels based on ATR + Order Book walls
+      stopLoss: smartLevels.stopLoss,
+      trailingStopPrice: smartLevels.stopLoss,
+      takeProfit: smartLevels.takeProfit,
+      trailingTPPrice: smartLevels.takeProfit,
+      atr: smartLevels.atr,
+      orderBookWalls: smartLevels.walls,
+      breakEvenActivated: false,
+      aggressiveTrailActivated: false,
 
       confidence: parseFloat(analysis.confidence),
       analysisId: analysis.analysisId || null,
@@ -140,96 +253,91 @@ class TradeManager {
     let reason = "";
     const side = trade.side || ORDER_ACTIONS.BUY;
     const isLong = isLongSignal(side);
-    const tpTargetPercent = Math.max(
-      (Number(this.config.TRAILING_TAKE_PROFIT || 1.02) - 1) * 100,
-      0.5,
-    );
-    const lock1Percent = Math.max(tpTargetPercent - 0.2, 0.2);
-    const lock2TriggerPercent = tpTargetPercent + 1;
-    const lock2Percent = lock2TriggerPercent - 0.2;
+    const atr = Number(trade.atr) > 0 ? trade.atr : 0;
+    const breakEvenTrigger = atr;
+    const standardTrailMultiplier = 1.2;
+    const aggressiveTrailMultiplier = 0.6;
 
     // ========== LONG TRADES (BUY) ==========
     if (isLong) {
-      const profitPercent =
-        ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
+      const profitMove = currentPrice - trade.entryPrice;
 
-      // تحديث الأسعار العليا
       if (currentPrice > trade.highestPrice) {
         trade.highestPrice = currentPrice;
       }
 
-      // 🚀 Profit Lock Aggressive:
-      // عند الهدف الأساسي لا نغلق فوراً، نرفع الستوب لضمان lock1Percent
-      if (profitPercent >= tpTargetPercent) {
-        const lockPrice1 = trade.entryPrice * (1 + lock1Percent / 100);
-        if (lockPrice1 > trade.trailingStopPrice) {
-          trade.trailingStopPrice = lockPrice1;
+      if (atr > 0 && profitMove >= breakEvenTrigger) {
+        trade.breakEvenActivated = true;
+        trade.aggressiveTrailActivated = true;
+        if (trade.trailingStopPrice < trade.entryPrice) {
+          trade.trailingStopPrice = trade.entryPrice;
         }
-        trade.profitLock2Activated = true;
       }
 
-      // عند الهدف الثاني نرفع الستوب لضمان lock2Percent
-      if (profitPercent >= lock2TriggerPercent) {
-        const lockPrice2 = trade.entryPrice * (1 + lock2Percent / 100);
-        if (lockPrice2 > trade.trailingStopPrice) {
-          trade.trailingStopPrice = lockPrice2;
-        }
-        trade.profitLock3Activated = true;
-      }
+      const trailDistance =
+        atr > 0
+          ? atr *
+            (trade.aggressiveTrailActivated
+              ? aggressiveTrailMultiplier
+              : standardTrailMultiplier)
+          : Math.abs(trade.entryPrice - trade.stopLoss);
 
-      // 🔴 SCALPING: Trailing SL عند -1.5%
-      const newTrailingStop =
-        trade.highestPrice * this.config.TRAILING_STOP_LOSS;
-      if (newTrailingStop > trade.trailingStopPrice) {
-        trade.trailingStopPrice = newTrailingStop;
+      const candidateStop = trade.highestPrice - trailDistance;
+      if (candidateStop > trade.trailingStopPrice) {
+        trade.trailingStopPrice = candidateStop;
       }
 
       if (currentPrice <= trade.trailingStopPrice && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
-        reason = CLOSE_REASONS.SL_SCALP;
+        reason = CLOSE_REASONS.TRAILING_SL;
+      }
+
+      if (currentPrice >= trade.takeProfit && !shouldClose) {
+        shouldClose = true;
+        exitPrice = trade.takeProfit;
+        reason = CLOSE_REASONS.TRAILING_TP;
       }
     }
     // ========== SHORT TRADES (SELL) ==========
     else {
-      const profitPercent =
-        ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
+      const profitMove = trade.entryPrice - currentPrice;
 
-      // تحديث الأسعار الدنيا
       if (currentPrice < trade.lowestPrice) {
         trade.lowestPrice = currentPrice;
       }
 
-      // 🚀 Profit Lock Aggressive (SHORT):
-      // عند الهدف الأساسي لا نغلق فوراً، نرفع الستوب لضمان lock1Percent
-      if (profitPercent >= tpTargetPercent) {
-        const lockPrice1 = trade.entryPrice * (1 - lock1Percent / 100);
-        if (lockPrice1 < trade.trailingStopPrice) {
-          trade.trailingStopPrice = lockPrice1;
+      if (atr > 0 && profitMove >= breakEvenTrigger) {
+        trade.breakEvenActivated = true;
+        trade.aggressiveTrailActivated = true;
+        if (trade.trailingStopPrice > trade.entryPrice) {
+          trade.trailingStopPrice = trade.entryPrice;
         }
-        trade.profitLock2Activated = true;
       }
 
-      // عند الهدف الثاني نرفع الستوب لضمان lock2Percent
-      if (profitPercent >= lock2TriggerPercent) {
-        const lockPrice2 = trade.entryPrice * (1 - lock2Percent / 100);
-        if (lockPrice2 < trade.trailingStopPrice) {
-          trade.trailingStopPrice = lockPrice2;
-        }
-        trade.profitLock3Activated = true;
-      }
+      const trailDistance =
+        atr > 0
+          ? atr *
+            (trade.aggressiveTrailActivated
+              ? aggressiveTrailMultiplier
+              : standardTrailMultiplier)
+          : Math.abs(trade.stopLoss - trade.entryPrice);
 
-      // 🔴 SCALPING: Trailing SL عند -1.5%
-      const newTrailingStop =
-        trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
-      if (newTrailingStop < trade.trailingStopPrice) {
-        trade.trailingStopPrice = newTrailingStop;
+      const candidateStop = trade.lowestPrice + trailDistance;
+      if (candidateStop < trade.trailingStopPrice) {
+        trade.trailingStopPrice = candidateStop;
       }
 
       if (currentPrice >= trade.trailingStopPrice && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
-        reason = CLOSE_REASONS.SL_SCALP;
+        reason = CLOSE_REASONS.TRAILING_SL;
+      }
+
+      if (currentPrice <= trade.takeProfit && !shouldClose) {
+        shouldClose = true;
+        exitPrice = trade.takeProfit;
+        reason = CLOSE_REASONS.TRAILING_TP;
       }
     }
 
