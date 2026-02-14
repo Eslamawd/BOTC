@@ -38,11 +38,11 @@ const CONFIG = {
   TRADING_TYPE: process.env.TRADING_TYPE || "futures", // 'spot' or 'futures'
   LEVERAGE: parseInt(process.env.LEVERAGE) || 5, // رافعة مالية (Futures فقط)
 
-  // 📊 Trailing Mechanism - RELAXED (لتعطي الصفقات وقت للصعود)
-  TRAILING_STOP_LOSS: 0.95, // -5% (كان -2% محكم جداً)
-  TRAILING_TAKE_PROFIT: 1.03, // +3% (initial min profit before unlimited)
+  // 📊 SCALPING MODE - ربح سريع 1-2% ثم طلع!
+  TRAILING_STOP_LOSS: 0.985, // -1.5% (محكم جداً للـ Scalping)
+  TRAILING_TAKE_PROFIT: 1.02, // +2% (الهدف الثابت - اطلع فوراً!)
   TRAILING_STEP: 0.001,
-  USE_UNLIMITED_PROFIT: true, // 🔥 UNLIMITED PROFIT MODE: استمر مع الترند بعد +3%!
+  USE_UNLIMITED_PROFIT: false, // ❌ بدون unlimited! TP ثابت = إغلاق فوري
 
   // 🎯 خيارات إضافية للـ Advanced AI
   USE_ORDER_BOOK_ANALYSIS: true, // ✅ استخدم Order Book
@@ -51,8 +51,8 @@ const CONFIG = {
   USE_SYMBOLIC_AI: true, // ✅ استخدم Symbolic AI الكامل
   USE_WEBSOCKET: true, // ✅ استخدم WebSocket للبيانات الحية
 
-  // ⏱️ Trade Management
-  TIMEOUT_HOURS: 24,
+  // ⏱️ Trade Management - Scalping
+  TIMEOUT_HOURS: 0.5, // 🚀 30 دقيقة فقط (الصفقات السريعة ما تقعد!)
   MAX_CONCURRENT_TRADES_PER_SYMBOL: 1,
 
   // 📊 Multi-Timeframe Analysis
@@ -61,9 +61,9 @@ const CONFIG = {
   REQUIRE_TREND_CONFIRMATION: true, // يجب توافق الاتجاهين
   REPORT_INTERVAL_HOURS: 3, // تقرير لايف على التليجرام كل 3 ساعات
 
-  // 🧠 AI Settings - أقل صرامة
-  MIN_CONFIDENCE: 10, // ⬇️ خفضنا من 15 لـ 10
-  VOLUME_RATIO_MIN: 1.2, // ⬇️ خفضنا من 2.0 لـ 1.2
+  // 🧠 AI Settings - معايير عالية جداً للـ Scalping
+  MIN_CONFIDENCE: 20, // 🔧 عالي جداً - صفقات قوية فقط!
+  VOLUME_RATIO_MIN: 1.5, // 🔧 فوليوم قوي مطلوب
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
   // PAPER/LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
@@ -71,7 +71,7 @@ const CONFIG = {
   MODE: process.env.MODE || "LIVE_PAPER", // Default = LIVE_PAPER (آمن + حقيقي)
 
   // ⏱️ فترة التحديث للوضع Live (بالثواني)
-  LIVE_UPDATE_INTERVAL: 300, // كل 300 ثانية (5 دقائق) - أطول للسماح للصفقات بالصعود
+  LIVE_UPDATE_INTERVAL: 30, // 🚀 30 ثانية فقط - ردود فعل سريعة للـ Scalping!
 
   // 💾 Database
   DATA_DIR: process.env.DATA_DIR || "data",

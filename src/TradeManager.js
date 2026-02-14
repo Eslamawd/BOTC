@@ -72,7 +72,7 @@ class TradeManager {
   }
 
   /**
-   * تحديث الصفقة مع Trailing (يدعم LONG و SHORT)
+   * تحديث الصفقة مع Trailing (يدعم LONG و SHORT) - SCALPING MODE
    */
   updateTradeTrailing(trade, currentPrice, timestamp) {
     let shouldClose = false;
@@ -80,126 +80,68 @@ class TradeManager {
     let reason = "";
     const side = trade.side || "BUY";
     const isLong = side === "BUY" || side === "LONG";
-    const isShort = side === "SELL" || side === "SHORT";
 
     // ========== LONG TRADES (BUY) ==========
     if (isLong) {
-      // حساب الربح الحالي
       const profitPercent =
         ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
 
-      // تحديث الأسعار العليا للـ LONG
+      // تحديث الأسعار العليا
       if (currentPrice > trade.highestPrice) {
         trade.highestPrice = currentPrice;
       }
 
-      // ✅ SAFETY NET: ما نبدأ trailing السل حتى الصفقة تربح +1%
-      // (يعطي الصفقة وقت آمن للصعود قبل الحماية)
-      if (profitPercent >= 1) {
-        // Trailing Stop Loss - يتحرك للأعلى فقط
-        const newTrailingStop =
-          trade.highestPrice * this.config.TRAILING_STOP_LOSS;
-        if (newTrailingStop > trade.trailingStopPrice) {
-          trade.trailingStopPrice = newTrailingStop;
-        }
+      // 🚀 SCALPING: إغلاق عند +2% TP
+      if (profitPercent >= 2) {
+        shouldClose = true;
+        exitPrice = currentPrice;
+        reason = "TP_SCALP";
       }
 
-      // تفعيل الإغلاق بناءً على الترايلينج (فقط بعد +1%)
-      if (profitPercent >= 1 && currentPrice <= trade.trailingStopPrice) {
+      // 🔴 SCALPING: Trailing SL عند -1.5%
+      const newTrailingStop = trade.highestPrice * this.config.TRAILING_STOP_LOSS;
+      if (newTrailingStop > trade.trailingStopPrice) {
+        trade.trailingStopPrice = newTrailingStop;
+      }
+
+      if (currentPrice <= trade.trailingStopPrice && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
-        reason = "TRAILING_SL";
-      }
-
-      // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
-      if (
-        this.config.USE_UNLIMITED_PROFIT &&
-        profitPercent >= 3 &&
-        !trade.hitMinProfit
-      ) {
-        trade.hitMinProfit = true;
-        // نزيل الـ TP، الآن الـ SL فقط سيغلق الصفقة
-      }
-
-      // إذا في unlimited mode و valid takeProfit بدون hitting min profit
-      if (!trade.hitMinProfit) {
-        if (
-          profitPercent >= 10 &&
-          currentPrice > trade.trailingTPPrice * 1.002
-        ) {
-          trade.trailingTPPrice =
-            currentPrice * (1 - this.config.TRAILING_STEP);
-        }
-
-        if (currentPrice >= trade.trailingTPPrice && profitPercent >= 5) {
-          shouldClose = true;
-          exitPrice = trade.trailingTPPrice;
-          reason = "TRAILING_TP";
-        }
+        reason = "SL_SCALP";
       }
     }
-
     // ========== SHORT TRADES (SELL) ==========
     else {
-      // حساب الربح الحالي (للـ SHORT: entry - current)
       const profitPercent =
         ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
 
-      // تحديث الأسعار الدنيا للـ SHORT
+      // تحديث الأسعار الدنيا
       if (currentPrice < trade.lowestPrice) {
         trade.lowestPrice = currentPrice;
       }
 
-      // ✅ SAFETY NET: ما نبدأ trailing السل حتى الصفقة تربح +1%
-      if (profitPercent >= 1) {
-        // Trailing Stop Loss - يتحرك للأسفل فقط
-        const newTrailingStop =
-          trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
-        if (newTrailingStop < trade.trailingStopPrice) {
-          trade.trailingStopPrice = newTrailingStop;
-        }
+      // 🚀 SCALPING: إغلاق عند +2% TP
+      if (profitPercent >= 2) {
+        shouldClose = true;
+        exitPrice = currentPrice;
+        reason = "TP_SCALP";
       }
 
-      // تفعيل الإغلاق بناءً على الترايلينج (فقط بعد +1%)
-      if (profitPercent >= 1 && currentPrice >= trade.trailingStopPrice) {
+      // 🔴 SCALPING: Trailing SL عند -1.5%
+      const newTrailingStop = trade.lowestPrice / this.config.TRAILING_STOP_LOSS;
+      if (newTrailingStop < trade.trailingStopPrice) {
+        trade.trailingStopPrice = newTrailingStop;
+      }
+
+      if (currentPrice >= trade.trailingStopPrice && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
-        reason = "TRAILING_SL";
-      }
-
-      // 🔥 UNLIMITED PROFIT MODE: بعد +3% profit، استمر مع الترند
-      if (
-        this.config.USE_UNLIMITED_PROFIT &&
-        profitPercent >= 3 &&
-        !trade.hitMinProfit
-      ) {
-        trade.hitMinProfit = true;
-        // نزيل الـ TP، الآن الـ SL فقط سيغلق الصفقة
-      }
-
-      // إذا في unlimited mode و valid takeProfit بدون hitting min profit
-      if (!trade.hitMinProfit) {
-        if (
-          profitPercent >= 10 &&
-          currentPrice < trade.trailingTPPrice * 0.998
-        ) {
-          trade.trailingTPPrice =
-            currentPrice * (1 + this.config.TRAILING_STEP);
-        }
-
-        if (currentPrice <= trade.trailingTPPrice && profitPercent >= 5) {
-          shouldClose = true;
-          exitPrice = trade.trailingTPPrice;
-          reason = "TRAILING_TP";
-        }
+        reason = "SL_SCALP";
       }
     }
 
-    // Timeout (مشترك للـ LONG و SHORT)
-    if (
-      timestamp - trade.entryTime >
-      this.config.TIMEOUT_HOURS * 60 * 60 * 1000
-    ) {
+    // Timeout (30 دقيقة للـ Scalping)
+    if (timestamp - trade.entryTime > this.config.TIMEOUT_HOURS * 60 * 60 * 1000) {
       shouldClose = true;
       exitPrice = currentPrice;
       reason = "TIMEOUT";
