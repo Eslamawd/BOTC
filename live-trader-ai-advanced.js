@@ -38,9 +38,9 @@ const CONFIG = {
   TRADING_TYPE: process.env.TRADING_TYPE || "futures", // 'spot' or 'futures'
   LEVERAGE: parseInt(process.env.LEVERAGE) || 5, // رافعة مالية (Futures فقط)
 
-  // 📊 SCALPING MODE - ربح سريع 1-2% ثم طلع!
-  TRAILING_STOP_LOSS: 0.985, // -1.5% (محكم جداً للـ Scalping)
-  TRAILING_TAKE_PROFIT: 1.02, // +2% (الهدف الثابت - اطلع فوراً!)
+  // 📊 HYPER SCALPING MODE - ربح سريع 0.5-1% ثم طلع فوراً!
+  TRAILING_STOP_LOSS: 0.99, // -1% (محكم جداً - خروج سريع من الخسارة)
+  TRAILING_TAKE_PROFIT: 1.01, // +1% (الهدف الثابت - أسرع من كدة!)
   TRAILING_STEP: 0.001,
   USE_UNLIMITED_PROFIT: false, // ❌ بدون unlimited! TP ثابت = إغلاق فوري
 
@@ -51,8 +51,8 @@ const CONFIG = {
   USE_SYMBOLIC_AI: true, // ✅ استخدم Symbolic AI الكامل
   USE_WEBSOCKET: true, // ✅ استخدم WebSocket للبيانات الحية
 
-  // ⏱️ Trade Management - Scalping
-  TIMEOUT_HOURS: 0.5, // 🚀 30 دقيقة فقط (الصفقات السريعة ما تقعد!)
+  // ⏱️ Trade Management - Hyper Scalping
+  TIMEOUT_HOURS: 0.25, // 🚀 15 دقيقة فقط! (خروج أسرع)
   MAX_CONCURRENT_TRADES_PER_SYMBOL: 1,
 
   // 📊 Multi-Timeframe Analysis
