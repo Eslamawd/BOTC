@@ -14,6 +14,7 @@
 const SymbolicAI = require("./ai/SymbolicAI");
 const VolumeProfileAnalyzer = require("./modules/VolumeProfileAnalyzer");
 const WhaleTracker = require("./modules/WhaleTracker");
+const { SIGNALS } = require("./constants/signals");
 
 class AdvancedAIAnalyzer {
   constructor(config, exchange, orderBookProvider = null, database = null) {
@@ -146,13 +147,15 @@ class AdvancedAIAnalyzer {
         confidence: decision.confidence.toFixed(1),
         aiScore: decision.confidence,
         signals: decision.supportingFactors,
+        learnedPattern: decision.learnedPattern || null,
+        failingPenaltyApplied: decision.learnedPattern?.category === "failing",
 
         // للتوافق مع الكود القديم
         shouldBuy:
-          decision.action === "LONG" &&
+          decision.action === SIGNALS.LONG &&
           decision.confidence >= this.config.MIN_CONFIDENCE,
         shouldSell:
-          decision.action === "SHORT" &&
+          decision.action === SIGNALS.SHORT &&
           decision.confidence >= this.config.MIN_CONFIDENCE,
 
         // معلومات إضافية

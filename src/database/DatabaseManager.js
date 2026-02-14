@@ -319,6 +319,40 @@ class DatabaseManager {
   }
 
   /**
+   * ✅ إغلاق صفقة موجودة (UPDATE) بدلاً من إدراج سجل جديد
+   */
+  async closeTradeRecord(tradeId, closeData) {
+    if (!this.initialized || !tradeId) return null;
+
+    try {
+      const sql = `
+        UPDATE trades
+        SET status = 'CLOSED',
+            exitPrice = ?,
+            profitLoss = ?,
+            profitLossPercent = ?,
+            closedAt = ?,
+            reason = ?
+        WHERE id = ? AND status = 'OPEN'
+      `;
+
+      const result = await this.runQuery(sql, [
+        closeData.exitPrice,
+        closeData.profitLoss,
+        closeData.profitLossPercent,
+        closeData.closedAt || new Date().toISOString(),
+        closeData.reason || null,
+        tradeId,
+      ]);
+
+      return result.changes > 0;
+    } catch (error) {
+      console.error("❌ Error closing trade record:", error.message);
+      return false;
+    }
+  }
+
+  /**
    * 🔄 تحديث نتيجة التحليل بعد إغلاق الصفقة
    */
   async updateAnalysisOutcome(analysisId, trade) {
@@ -415,13 +449,24 @@ class DatabaseManager {
    * 🧠 حفظ نمط ناجح
    */
   async saveSuccessfulPattern(pattern) {
+    return this.savePatternOutcome(pattern);
+  }
+
+  /**
+   * 🧠 حفظ ناتج نمط (ناجح أو خاسر) للتعلم المتوازن
+   */
+  async savePatternOutcome(pattern) {
     if (!this.initialized) return;
 
     try {
-      // 🔥 فلتر: حفظ فقط الأنماط الناجحة السريعة جداً!
-      // يجب أن تحقق profit > 2% لتستحق الحفظ
-      if (!pattern.profit || pattern.profit < 2) {
-        return; // تجاهل الأرباح الصغيرة
+      if (pattern?.profit === null || pattern?.profit === undefined) {
+        return;
+      }
+
+      const isLoss = pattern.profit < 0;
+      // نحفظ الخسائر دائمًا للتعلم العكسي، والأرباح فقط إذا كانت ذات معنى
+      if (!isLoss && pattern.profit < 2) {
+        return;
       }
 
       // البحث عن نمط مشابه
@@ -438,28 +483,25 @@ class DatabaseManager {
       ]);
 
       if (existing) {
-        // تحديث النمط فقط إذا كان الربح الجديد أفضل أيضاً
-        if (pattern.profit > existing.avgProfit) {
-          const newOccurrences = existing.occurrences + 1;
-          const newAvgProfit =
-            (existing.avgProfit * existing.occurrences + pattern.profit) /
-            newOccurrences;
+        const newOccurrences = existing.occurrences + 1;
+        const newAvgProfit =
+          (existing.avgProfit * existing.occurrences + pattern.profit) /
+          newOccurrences;
 
-          const updateSql = `
-            UPDATE patterns 
-            SET occurrences = ?, avgProfit = ?, lastSeen = ?
-            WHERE id = ?
-          `;
+        const updateSql = `
+          UPDATE patterns 
+          SET occurrences = ?, avgProfit = ?, lastSeen = ?
+          WHERE id = ?
+        `;
 
-          await this.runQuery(updateSql, [
-            newOccurrences,
-            newAvgProfit,
-            new Date().toISOString(),
-            existing.id,
-          ]);
-        }
+        await this.runQuery(updateSql, [
+          newOccurrences,
+          newAvgProfit,
+          new Date().toISOString(),
+          existing.id,
+        ]);
       } else {
-        // إضافة نمط جديد (فقط الناجح السريع!)
+        // إضافة نمط جديد (ناجح أو خاسر)
         const insertSql = `
           INSERT INTO patterns (timestamp, symbol, type, confidence, indicators, profit, occurrences, avgProfit, lastSeen)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -477,12 +519,14 @@ class DatabaseManager {
           new Date().toISOString(),
         ]);
 
+        const sign = pattern.profit >= 0 ? "+" : "";
+        const label = pattern.profit >= 0 ? "💎" : "⚠️";
         console.log(
-          `💎 Pattern saved (${pattern.symbol}): +${pattern.profit.toFixed(2)}% profit`,
+          `${label} Pattern saved (${pattern.symbol}): ${sign}${pattern.profit.toFixed(2)}% profit`,
         );
       }
     } catch (error) {
-      console.error("❌ Error saving pattern:", error.message);
+      console.error("❌ Error saving pattern outcome:", error.message);
     }
   }
 

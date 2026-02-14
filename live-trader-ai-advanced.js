@@ -27,6 +27,17 @@ const TradeManager = require("./src/TradeManager");
 const PortfolioManager = require("./src/PortfolioManager");
 const TelegramBotManager = require("./src/modules/TelegramBot");
 const DatabaseManager = require("./src/database/DatabaseManager");
+const {
+  CLOSE_REASON_LABELS,
+  normalizeCloseReason: normalizeCloseReasonKey,
+} = require("./src/constants/closeReasons");
+const {
+  SIGNALS,
+  ORDER_ACTIONS,
+  toPositionSide,
+  toOrderAction,
+  isAligned,
+} = require("./src/constants/signals");
 
 const CONFIG = {
   // 💼 Portfolio Settings
@@ -39,8 +50,8 @@ const CONFIG = {
   LEVERAGE: parseInt(process.env.LEVERAGE) || 5, // رافعة مالية (Futures فقط)
 
   // 📊 HYPER SCALPING MODE - ربح سريع 0.5-1% ثم طلع فوراً!
-  TRAILING_STOP_LOSS: 0.99, // -1% (محكم جداً - خروج سريع من الخسارة)
-  TRAILING_TAKE_PROFIT: 1.01, // +1% (الهدف الثابت - أسرع من كدة!)
+  TRAILING_STOP_LOSS: 0.97, // -3% (مساحة تنفّس أكبر للسعر)
+  TRAILING_TAKE_PROFIT: 1.02, // +2% (هدف الربح الأساسي)
   TRAILING_STEP: 0.001,
   USE_UNLIMITED_PROFIT: false, // ❌ بدون unlimited! TP ثابت = إغلاق فوري
 
@@ -52,7 +63,9 @@ const CONFIG = {
   USE_WEBSOCKET: true, // ✅ استخدم WebSocket للبيانات الحية
 
   // ⏱️ Trade Management - Hyper Scalping
-  TIMEOUT_HOURS: 0.25, // 🚀 15 دقيقة فقط! (خروج أسرع)
+  TIMEOUT_HOURS: 4, // ⏱️ 4 ساعات قبل الإغلاق بالـ Timeout
+  TIMEOUT_MIN_HOURS: 2,
+  TIMEOUT_MAX_HOURS: 8,
   MAX_CONCURRENT_TRADES_PER_SYMBOL: 1,
 
   // 📊 Multi-Timeframe Analysis
@@ -200,14 +213,11 @@ class AdvancedTradingAI {
       );
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
-      // 🧹 تنظيف دوري كل 3 دقائق (حذف الخاسرة فقط!)
+      // 🧹 تنظيف دوري كل 3 دقائق (تنظيف زمني فقط للحفاظ على بيانات التعلم)
       if (timestamp - this.liveStatus.lastCleanup > CLEANUP_INTERVAL_MS) {
-        console.log(`🔥 Aggressive cleanup triggered (3 mins)...`);
+        console.log(`🧹 Scheduled cleanup triggered (3 mins)...`);
         try {
-          // 1️⃣ حذف السجلات الخاسرة فقط (الناجحة تبقى للتعلم)
-          await this.database.deleteLosingRecords();
-
-          // 2️⃣ تنظيف البيانات القديمة (كل 20 يوم)
+          // 1️⃣ تنظيف البيانات القديمة فقط (كل 20 يوم)
           await this.database.cleanOldData(this.config.DATA_RETENTION_DAYS);
 
           this.liveStatus.lastCleanup = timestamp;
@@ -237,39 +247,36 @@ class AdvancedTradingAI {
   }
 
   buildEntryDecision(trend1h, entry15m) {
-    const trendSide = trend1h?.side || "HOLD";
+    const trendSide = trend1h?.side || SIGNALS.HOLD;
     const trendConf = Number(trend1h?.confidence || 0);
-    const entrySide = entry15m?.side || "HOLD";
+    const entrySide = entry15m?.side || SIGNALS.HOLD;
     const entryConf = Number(entry15m?.confidence || 0);
 
     let shouldEnter = false;
     let finalSignal = null;
 
     if (this.config.REQUIRE_TREND_CONFIRMATION) {
-      if (trendSide === "LONG" && entry15m?.shouldBuy) {
+      if (trendSide === SIGNALS.LONG && entry15m?.shouldBuy) {
         shouldEnter = true;
-        finalSignal = "BUY";
-      } else if (trendSide === "SHORT" && entry15m?.shouldSell) {
+        finalSignal = ORDER_ACTIONS.BUY;
+      } else if (trendSide === SIGNALS.SHORT && entry15m?.shouldSell) {
         shouldEnter = true;
-        finalSignal = "SELL";
+        finalSignal = ORDER_ACTIONS.SELL;
       }
     } else {
       if (entry15m?.shouldBuy) {
         shouldEnter = true;
-        finalSignal = "BUY";
+        finalSignal = ORDER_ACTIONS.BUY;
       } else if (entry15m?.shouldSell) {
         shouldEnter = true;
-        finalSignal = "SELL";
+        finalSignal = ORDER_ACTIONS.SELL;
       }
     }
 
     let status = "skip";
     if (shouldEnter) {
       status = "ready";
-    } else if (
-      (trendSide === "LONG" && entrySide === "LONG") ||
-      (trendSide === "SHORT" && entrySide === "SHORT")
-    ) {
+    } else if (isAligned(trendSide, entrySide)) {
       status = entryConf >= this.config.MIN_CONFIDENCE ? "ready" : "near";
     }
 
@@ -403,7 +410,13 @@ class AdvancedTradingAI {
       if (this.symbolData[symbol].activeTrades.length < maxTrades) {
         if (decision.shouldEnter && decision.finalSignal) {
           const analysis = entry15m;
-          analysis.side = decision.finalSignal === "BUY" ? "LONG" : "SHORT";
+          analysis.side = toPositionSide(decision.finalSignal);
+          analysis.trendConfidence = decision.trendConf;
+          analysis.trendContext = {
+            side: decision.trendSide,
+            confidence: decision.trendConf,
+          };
+          analysis.trendAligned = isAligned(decision.trendSide, analysis.side);
 
           const trade = this.tradeManager.openTrade(
             symbol,
@@ -418,17 +431,17 @@ class AdvancedTradingAI {
             this.symbolData[symbol].activeTrades.push(trade);
             this.balance -= trade.positionSize;
 
-            const emoji = decision.finalSignal === "BUY" ? "🟢" : "🔴";
-            const action = decision.finalSignal === "BUY" ? "BUY" : "SELL";
+            const action = toOrderAction(analysis.side) || decision.finalSignal;
+            const emoji = action === ORDER_ACTIONS.BUY ? "🟢" : "🔴";
 
             console.log(
-              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Mode: ${trade.executionMode}`,
+              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Timeout: ${trade.timeoutHours}h | Mode: ${trade.executionMode}`,
             );
 
             // حفظ في Database
             if (this.database && this.database.initialized) {
               try {
-                await this.database.saveTrade({
+                const dbTradeId = await this.database.saveTrade({
                   symbol: trade.symbol,
                   side: trade.side,
                   entryPrice: trade.entryPrice,
@@ -439,6 +452,9 @@ class AdvancedTradingAI {
                   analysisId: analysis.analysisId,
                   status: "OPEN",
                 });
+                if (dbTradeId) {
+                  trade.dbTradeId = dbTradeId;
+                }
               } catch (dbError) {
                 console.warn(`⚠️ Database save error: ${dbError.message}`);
               }
@@ -463,7 +479,8 @@ class AdvancedTradingAI {
     this.symbolData[symbol].dailyProfit += closedTrade.pnl;
 
     const emoji = closedTrade.profitPercent > 0 ? "✅" : "❌";
-    const side = trade.side === "SELL" ? "CLOSE SHORT" : "CLOSE LONG";
+    const side =
+      trade.side === ORDER_ACTIONS.SELL ? "CLOSE SHORT" : "CLOSE LONG";
     console.log(
       `${emoji} [${symbol}] ${side} @ $${exitPrice.toFixed(2)} | P&L: ${closedTrade.profitPercent.toFixed(2)}% | Balance: $${this.balance.toFixed(2)}`,
     );
@@ -479,22 +496,38 @@ class AdvancedTradingAI {
     // 💾 حفظ الصفقة المغلقة في Database
     if (this.database && this.database.initialized) {
       try {
-        await this.database.saveTrade({
-          symbol: closedTrade.symbol,
-          side: closedTrade.side,
-          entryPrice: closedTrade.entryPrice,
+        const closePayload = {
           exitPrice: closedTrade.exitPrice,
-          quantity: closedTrade.quantity,
-          stopLoss: closedTrade.stopLoss,
-          takeProfit: closedTrade.takeProfit,
-          confidence: closedTrade.confidence,
-          analysisId: closedTrade.analysisId,
-          status: "CLOSED",
           profitLoss: closedTrade.pnl,
           profitLossPercent: closedTrade.profitPercent,
           closedAt: new Date().toISOString(),
           reason: reason,
-        });
+        };
+
+        if (closedTrade.dbTradeId) {
+          await this.database.closeTradeRecord(
+            closedTrade.dbTradeId,
+            closePayload,
+          );
+        } else {
+          // fallback آمن إذا لم يتوفر trade id
+          await this.database.saveTrade({
+            symbol: closedTrade.symbol,
+            side: closedTrade.side,
+            entryPrice: closedTrade.entryPrice,
+            exitPrice: closedTrade.exitPrice,
+            quantity: closedTrade.quantity,
+            stopLoss: closedTrade.stopLoss,
+            takeProfit: closedTrade.takeProfit,
+            confidence: closedTrade.confidence,
+            analysisId: closedTrade.analysisId,
+            status: "CLOSED",
+            profitLoss: closedTrade.pnl,
+            profitLossPercent: closedTrade.profitPercent,
+            closedAt: closePayload.closedAt,
+            reason: reason,
+          });
+        }
 
         // تحديث إحصائيات الأداء
         await this.database.updatePerformance({
@@ -502,16 +535,14 @@ class AdvancedTradingAI {
           profitLoss: closedTrade.pnl,
         });
 
-        // حفظ الأنماط الناجحة (أرباح > 5%)
-        if (closedTrade.profitPercent > 5) {
-          await this.database.saveSuccessfulPattern({
-            symbol: closedTrade.symbol,
-            type: closedTrade.side,
-            confidence: closedTrade.confidence,
-            indicators: closedTrade.indicators || {},
-            profit: closedTrade.pnl,
-          });
-        }
+        // حفظ ناتج النمط للتعلم المتوازن (ناجح + خاسر)
+        await this.database.savePatternOutcome({
+          symbol: closedTrade.symbol,
+          type: closedTrade.side,
+          confidence: closedTrade.confidence,
+          indicators: closedTrade.indicators || {},
+          profit: closedTrade.pnl,
+        });
       } catch (dbError) {
         console.warn(`⚠️ Database update trade error: ${dbError.message}`);
       }
@@ -573,18 +604,11 @@ class AdvancedTradingAI {
 
     try {
       const emoji = profitPercent > 0 ? "✅" : "❌";
-      const reasonMap = {
-        TRAILING_SL: "Stop Loss",
-        TRAILING_TP: "Take Profit",
-        TIMEOUT: "Timeout",
-        END: "End",
-      };
-
       const message =
         `${emoji} *إغلاق:* ${trade.symbol}\n` +
         `📊 *P&L:* ${profitPercent > 0 ? "+" : ""}${profitPercent.toFixed(2)}%\n` +
         `💸 *USD:* $${pnl.toFixed(2)}\n` +
-        `🧾 *السبب:* ${reasonMap[reason] || reason}`;
+        `🧾 *السبب:* ${CLOSE_REASON_LABELS[reason] || reason}`;
 
       await this.telegramManager.send(message);
       console.log(
@@ -601,6 +625,7 @@ class AdvancedTradingAI {
       (Date.now() - this.liveStatus.startedAt) /
       3600000
     ).toFixed(1);
+    const weeklyKpis = this.calculateWeeklyKpis();
 
     const analyzedLines = this.config.SYMBOLS.map((symbol) => {
       const lastTs = this.liveStatus.lastAnalysis[symbol];
@@ -626,6 +651,22 @@ class AdvancedTradingAI {
           .join("\n")
       : "• لا توجد إشارات قريبة حاليا";
 
+    const reasonLines = Object.entries(weeklyKpis.byReason)
+      .map(([reason, stats]) => {
+        return `• ${reason}: Win ${stats.winRate.toFixed(1)}% | AvgPnL $${stats.avgPnl.toFixed(2)} | Count ${stats.total}`;
+      })
+      .join("\n");
+
+    const timeoutAlert =
+      weeklyKpis.timeoutCloseRatio >= 35
+        ? "⚠️ نسبة TIMEOUT مرتفعة - يفضّل تشديد جودة الدخول"
+        : "✅ نسبة TIMEOUT ضمن النطاق المقبول";
+
+    const penaltyImpactLine =
+      weeklyKpis.failingPenalty.applied > 0
+        ? `• failing penalty: Applied ${weeklyKpis.failingPenalty.rate.toFixed(1)}% | Win(with) ${weeklyKpis.failingPenalty.winRateWithPenalty.toFixed(1)}% vs Win(without) ${weeklyKpis.failingPenalty.winRateWithoutPenalty.toFixed(1)}%`
+        : "• failing penalty: لا توجد حالات مطبقة هذا الأسبوع";
+
     return (
       `📡 *تقرير لايف كل 3 ساعات*\n` +
       `⏱️ *مدة التشغيل:* ${uptimeHours} ساعة\n` +
@@ -634,8 +675,88 @@ class AdvancedTradingAI {
       `✅ *الصفقات:* ${this.performance.trades} (W:${this.performance.wins} / L:${this.performance.losses})\n\n` +
       `📊 *آخر تحليل للرموز:*\n${analyzedLines}\n\n` +
       `🎯 *إشارات قريبة للدخول:*\n${candidateLines}\n\n` +
+      `📈 *KPI أسبوعي (7 أيام):*\n` +
+      `• Timeout Ratio: ${weeklyKpis.timeoutCloseRatio.toFixed(1)}%\n` +
+      `${reasonLines || "• لا توجد صفقات مغلقة هذا الأسبوع"}\n` +
+      `${penaltyImpactLine}\n` +
+      `${timeoutAlert}\n\n` +
       `🕒 *الوقت:* ${now.toLocaleString()}`
     );
+  }
+
+  normalizeCloseReason(reason) {
+    return normalizeCloseReasonKey(reason);
+  }
+
+  calculateWeeklyKpis() {
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const since = Date.now() - WEEK_MS;
+
+    const closedTrades = this.allTrades.filter((trade) => {
+      const closedAt =
+        trade.exitTime ||
+        (trade.closedAt ? new Date(trade.closedAt).getTime() : null) ||
+        trade.entryTime;
+      return trade.status === "CLOSED" && closedAt >= since;
+    });
+
+    const byReason = {};
+    let timeoutCount = 0;
+
+    for (const trade of closedTrades) {
+      const reason = this.normalizeCloseReason(trade.exitReason);
+      if (!byReason[reason]) {
+        byReason[reason] = {
+          total: 0,
+          wins: 0,
+          pnlSum: 0,
+          winRate: 0,
+          avgPnl: 0,
+        };
+      }
+
+      byReason[reason].total += 1;
+      if (trade.profitPercent > 0) byReason[reason].wins += 1;
+      byReason[reason].pnlSum += Number(trade.pnl || 0);
+
+      if (reason === "TIMEOUT") timeoutCount += 1;
+    }
+
+    Object.values(byReason).forEach((item) => {
+      item.winRate = item.total > 0 ? (item.wins / item.total) * 100 : 0;
+      item.avgPnl = item.total > 0 ? item.pnlSum / item.total : 0;
+    });
+
+    const withPenalty = closedTrades.filter((t) => t.failingPenaltyApplied);
+    const withoutPenalty = closedTrades.filter((t) => !t.failingPenaltyApplied);
+
+    const withPenaltyWins = withPenalty.filter(
+      (t) => t.profitPercent > 0,
+    ).length;
+    const withoutPenaltyWins = withoutPenalty.filter(
+      (t) => t.profitPercent > 0,
+    ).length;
+
+    const totalClosed = closedTrades.length;
+
+    return {
+      totalClosed,
+      timeoutCloseRatio:
+        totalClosed > 0 ? (timeoutCount / totalClosed) * 100 : 0,
+      byReason,
+      failingPenalty: {
+        applied: withPenalty.length,
+        rate: totalClosed > 0 ? (withPenalty.length / totalClosed) * 100 : 0,
+        winRateWithPenalty:
+          withPenalty.length > 0
+            ? (withPenaltyWins / withPenalty.length) * 100
+            : 0,
+        winRateWithoutPenalty:
+          withoutPenalty.length > 0
+            ? (withoutPenaltyWins / withoutPenalty.length) * 100
+            : 0,
+      },
+    };
   }
 
   async sendLiveReport() {

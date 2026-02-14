@@ -39,9 +39,9 @@ class SymbolicAI {
 
     // نتائج التعلم من البيانات التاريخية (ثلاث فئات)
     this.learnedPatterns = {
-      successful: [],  // Success Rate > 60% → +20% boost
-      neutral: [],     // Success Rate 40-60% → 1.0x multiplier
-      failing: []      // Success Rate < 40% → -30% penalty
+      successful: [], // Success Rate > 60% → +20% boost
+      neutral: [], // Success Rate 40-60% → 1.0x multiplier
+      failing: [], // Success Rate < 40% → -30% penalty
     };
 
     // إحصائيات التعلم
@@ -130,15 +130,30 @@ class SymbolicAI {
     if (learnedBoost?.matched) {
       // تعزيز أو خفض الثقة بناءً على الأنماط المتعلمة
       finalDecision.confidence *= learnedBoost.boost;
+      finalDecision.confidence = Math.max(
+        0,
+        Math.min(100, finalDecision.confidence),
+      );
       finalDecision.learnedPattern = {
         category: learnedBoost.category,
         successRate: learnedBoost.successRate,
         occurrences: learnedBoost.pattern.occurrences,
         avgProfit: learnedBoost.pattern.avgProfit,
       };
+
+      if (learnedBoost.category === "failing") {
+        finalDecision.warnings.push(
+          `نمط خاسر متكرر: Success ${(learnedBoost.successRate * 100).toFixed(1)}% → تطبيق عقوبة ثقة`,
+        );
+      } else if (learnedBoost.category === "successful") {
+        finalDecision.supportingFactors.push(
+          `نمط ناجح تاريخياً: Success ${(learnedBoost.successRate * 100).toFixed(1)}% → تعزيز ثقة`,
+        );
+      }
+
       const changePercent = ((learnedBoost.boost - 1) * 100).toFixed(0);
       console.log(
-        `${learnedBoost.boostLabel} Pattern matched! Success Rate: ${(learnedBoost.successRate * 100).toFixed(1)}% (${learnedBoost.pattern.occurrences}x) - Confidence change: ${changePercent > 0 ? '+' : ''}${changePercent}%`,
+        `${learnedBoost.boostLabel} Pattern matched! Success Rate: ${(learnedBoost.successRate * 100).toFixed(1)}% (${learnedBoost.pattern.occurrences}x) - Confidence change: ${changePercent > 0 ? "+" : ""}${changePercent}%`,
       );
     }
 
@@ -799,14 +814,14 @@ class SymbolicAI {
       // سيتم تطبيق الـ boost/penalty بناءً على صنفها في applyLearnedPatterns
       this.learnedPatterns = {
         successful: allPatterns.successful || [], // Success Rate > 60% → +20% boost
-        neutral: allPatterns.neutral || [],       // Success Rate 40-60% → 1.0x multiplier
-        failing: allPatterns.failing || []        // Success Rate < 40% → -30% penalty
+        neutral: allPatterns.neutral || [], // Success Rate 40-60% → 1.0x multiplier
+        failing: allPatterns.failing || [], // Success Rate < 40% → -30% penalty
       };
 
       // حساب إحصائيات التعلم
-      const totalPatterns = 
-        this.learnedPatterns.successful.length + 
-        this.learnedPatterns.neutral.length + 
+      const totalPatterns =
+        this.learnedPatterns.successful.length +
+        this.learnedPatterns.neutral.length +
         this.learnedPatterns.failing.length;
 
       // تحديث إحصائيات التعلم
@@ -837,9 +852,9 @@ class SymbolicAI {
    */
   extractPatterns(analyses) {
     const patterns = {
-      successful: [],  // Success Rate > 60%
-      neutral: [],     // Success Rate 40-60%
-      failing: []      // Success Rate < 40%
+      successful: [], // Success Rate > 60%
+      neutral: [], // Success Rate 40-60%
+      failing: [], // Success Rate < 40%
     };
 
     // تجميع الأنماط المتشابهة
@@ -872,7 +887,8 @@ class SymbolicAI {
     // تصنيف الأنماط حسب معدل النجاح
     Object.keys(grouped).forEach((key) => {
       const group = grouped[key];
-      if (group.count >= 3) { // على الأقل 3 مرات
+      if (group.count >= 3) {
+        // على الأقل 3 مرات
 
         const successRate = group.successes / group.count;
         const pattern = {
@@ -883,7 +899,8 @@ class SymbolicAI {
           failures: group.failures,
           successRate,
           avgConfidence: group.avgConfidence / group.count,
-          avgProfit: group.successes > 0 ? group.avgProfit / group.successes : 0,
+          avgProfit:
+            group.successes > 0 ? group.avgProfit / group.successes : 0,
           indicators: group.indicators,
         };
 
@@ -903,7 +920,7 @@ class SymbolicAI {
     patterns.failing.sort((a, b) => a.successRate - b.successRate); // من الأسوأ للأفضل
 
     console.log(
-      `📊 Pattern Analysis: ${patterns.successful.length} successful, ${patterns.neutral.length} neutral, ${patterns.failing.length} failing`
+      `📊 Pattern Analysis: ${patterns.successful.length} successful, ${patterns.neutral.length} neutral, ${patterns.failing.length} failing`,
     );
 
     return patterns;
@@ -927,23 +944,25 @@ class SymbolicAI {
   /**
    * ✨ تطبيق الأنماط المتعلمة على التحليل الحالي
    * Apply learned patterns to current analysis with boost/penalty system
-   * 
+   *
    * Successful (>60%): +20% confidence boost 🚀
    * Neutral (40-60%): 1.0x multiplier (no change) ➡️
    * Failing (<40%): -30% confidence penalty ⛔
    */
   applyLearnedPatterns(currentAnalysis) {
-    if (!this.learnedPatterns || 
-        (this.learnedPatterns.successful?.length === 0 &&
-         this.learnedPatterns.neutral?.length === 0 &&
-         this.learnedPatterns.failing?.length === 0)) {
+    if (
+      !this.learnedPatterns ||
+      (this.learnedPatterns.successful?.length === 0 &&
+        this.learnedPatterns.neutral?.length === 0 &&
+        this.learnedPatterns.failing?.length === 0)
+    ) {
       return null; // لا توجد أنماط متعلمة
     }
 
     const currentKey = this.getPatternKey(currentAnalysis);
 
     // البحث عن نمط مطابق في جميع الفئات الثلاثة
-    
+
     // 1. البحث في الأنماط الناجحة (> 60%)
     let matchedPattern = this.learnedPatterns.successful?.find((pattern) => {
       return (
@@ -955,12 +974,12 @@ class SymbolicAI {
     if (matchedPattern) {
       return {
         matched: true,
-        category: 'successful',
+        category: "successful",
         pattern: matchedPattern,
         confidence: matchedPattern.avgConfidence,
         successRate: matchedPattern.successRate,
         boost: 1.2, // +20% boost للأنماط الناجحة
-        boostLabel: '🚀 +20% BOOST',
+        boostLabel: "🚀 +20% BOOST",
       };
     }
 
@@ -975,12 +994,12 @@ class SymbolicAI {
     if (matchedPattern) {
       return {
         matched: true,
-        category: 'neutral',
+        category: "neutral",
         pattern: matchedPattern,
         confidence: matchedPattern.avgConfidence,
         successRate: matchedPattern.successRate,
         boost: 1.0, // لا تغيير للأنماط المحايدة
-        boostLabel: '➡️ 1.0x NEUTRAL',
+        boostLabel: "➡️ 1.0x NEUTRAL",
       };
     }
 
@@ -994,16 +1013,16 @@ class SymbolicAI {
 
     if (matchedPattern) {
       console.log(
-        `⚠️ Pattern PENALTY: "${matchedPattern.key}" is failing (${(matchedPattern.successRate * 100).toFixed(1)}% < 40% threshold)`
+        `⚠️ Pattern PENALTY: "${matchedPattern.key}" is failing (${(matchedPattern.successRate * 100).toFixed(1)}% < 40% threshold)`,
       );
       return {
         matched: true,
-        category: 'failing',
+        category: "failing",
         pattern: matchedPattern,
         confidence: matchedPattern.avgConfidence,
         successRate: matchedPattern.successRate,
         boost: 0.7, // -30% penalty للأنماط الخاسرة
-        boostLabel: '⛔ -30% PENALTY',
+        boostLabel: "⛔ -30% PENALTY",
       };
     }
 
