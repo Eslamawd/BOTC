@@ -133,7 +133,9 @@ class TradeManager {
   calculateSmartLevels(entryPrice, analysis, side) {
     const isLong = isLongSignal(side);
     const atr = this.getAtrValue(analysis, entryPrice);
-    const minStopDistancePct = Number(this.config.MIN_STOP_DISTANCE_PCT || 0.006);
+    const minStopDistancePct = Number(
+      this.config.MIN_STOP_DISTANCE_PCT || 0.006,
+    );
     const minStopDistance = entryPrice * minStopDistancePct;
 
     const baseTakeProfit = isLong
