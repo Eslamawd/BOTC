@@ -133,8 +133,8 @@ class TradeManager {
     const atr = this.getAtrValue(analysis, entryPrice);
 
     const baseTakeProfit = isLong
-      ? entryPrice + atr * 2.0
-      : entryPrice - atr * 2.0;
+      ? entryPrice + atr * 2.5
+      : entryPrice - atr * 2.5;
     const baseStopLoss = isLong
       ? entryPrice - atr * 1.2
       : entryPrice + atr * 1.2;
@@ -269,8 +269,9 @@ class TradeManager {
       if (atr > 0 && profitMove >= breakEvenTrigger) {
         trade.breakEvenActivated = true;
         trade.aggressiveTrailActivated = true;
-        if (trade.trailingStopPrice < trade.entryPrice) {
-          trade.trailingStopPrice = trade.entryPrice;
+        const breakEvenStop = trade.entryPrice - atr * 0.5;
+        if (trade.trailingStopPrice < breakEvenStop) {
+          trade.trailingStopPrice = breakEvenStop;
         }
       }
 
@@ -310,8 +311,9 @@ class TradeManager {
       if (atr > 0 && profitMove >= breakEvenTrigger) {
         trade.breakEvenActivated = true;
         trade.aggressiveTrailActivated = true;
-        if (trade.trailingStopPrice > trade.entryPrice) {
-          trade.trailingStopPrice = trade.entryPrice;
+        const breakEvenStop = trade.entryPrice + atr * 0.5;
+        if (trade.trailingStopPrice > breakEvenStop) {
+          trade.trailingStopPrice = breakEvenStop;
         }
       }
 

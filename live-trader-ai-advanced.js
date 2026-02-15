@@ -75,7 +75,7 @@ const CONFIG = {
   REPORT_INTERVAL_HOURS: 3, // تقرير لايف على التليجرام كل 3 ساعات
 
   // 🧠 AI Settings - معايير عالية جداً للـ Scalping
-  MIN_CONFIDENCE: 20, // 🔧 عالي جداً - صفقات قوية فقط!
+  MIN_CONFIDENCE: 40, // 🔧 فلتر ثقة أعلى لصفقات أنضف
   VOLUME_RATIO_MIN: 1.5, // 🔧 فوليوم قوي مطلوب
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
