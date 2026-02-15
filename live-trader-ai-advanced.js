@@ -39,9 +39,29 @@ const {
   isAligned,
 } = require("./src/constants/signals");
 
+const parseSymbols = (value) => {
+  if (!value || typeof value !== "string") return null;
+  const parsed = value
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean)
+    .map((item) => (item.includes("/") ? item : `${item}/USDT`));
+  return parsed.length > 0 ? parsed : null;
+};
+
+const envSymbols = parseSymbols(process.env.SYMBOLS);
+
 const CONFIG = {
   // 💼 Portfolio Settings
-  SYMBOLS: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"], // إضافة SOL و XRP
+  SYMBOLS: envSymbols || [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "BNB/USDT",
+    "DOGE/USDT",
+    "ADA/USDT",
+  ],
   INITIAL_BALANCE: 100,
   RISK_PER_TRADE: 0.1,
 
@@ -53,6 +73,10 @@ const CONFIG = {
   TRAILING_STOP_LOSS: 0.97, // -3% (مساحة تنفّس أكبر للسعر)
   TRAILING_TAKE_PROFIT: 1.02, // +2% (هدف الربح الأساسي)
   TRAILING_STEP: 0.001,
+  ATR_MIN_PCT: parseFloat(process.env.ATR_MIN_PCT) || 0.005, // ✅ أقل ATR = 0.5% من السعر
+  MIN_STOP_DISTANCE_PCT: parseFloat(process.env.MIN_STOP_DISTANCE_PCT) || 0.006, // ✅ أقل مسافة SL = 0.6%
+  TRAILING_MIN_DISTANCE_PCT:
+    parseFloat(process.env.TRAILING_MIN_DISTANCE_PCT) || 0.005, // ✅ أقل مسافة Trailing = 0.5%
   USE_UNLIMITED_PROFIT: false, // ❌ بدون unlimited! TP ثابت = إغلاق فوري
 
   // 🎯 خيارات إضافية للـ Advanced AI
@@ -75,7 +99,12 @@ const CONFIG = {
   REPORT_INTERVAL_HOURS: 3, // تقرير لايف على التليجرام كل 3 ساعات
 
   // 🧠 AI Settings - معايير معقولة للـ Scalping
-  MIN_CONFIDENCE: 30, // 🔧 فلتر ثقة متوازن - يسمح بصفقات أكثر
+  MIN_CONFIDENCE: parseFloat(process.env.MIN_CONFIDENCE) || 50, // 🔒 رفع فلتر الثقة لتقليل الدخول الضعيف
+  MIN_TREND_CONFIDENCE: parseFloat(process.env.MIN_TREND_CONFIDENCE) || 45,
+  REQUIRE_ORDERBOOK_CONFIRMATION:
+    process.env.REQUIRE_ORDERBOOK_CONFIRMATION !== "false",
+  ALLOW_LONGS: process.env.ALLOW_LONGS !== "false",
+  ALLOW_SHORTS: process.env.ALLOW_SHORTS !== "false",
   VOLUME_RATIO_MIN: 1.5, // 🔧 فوليوم قوي مطلوب
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
@@ -89,6 +118,7 @@ const CONFIG = {
   // 💾 Database
   DATA_DIR: process.env.DATA_DIR || "data",
   DATA_RETENTION_DAYS: parseInt(process.env.DATA_RETENTION_DAYS) || 20,
+  ENABLE_DATA_CLEANUP: process.env.ENABLE_DATA_CLEANUP === "true",
 
   // 📲 Telegram
   ENABLE_TELEGRAM: true,
@@ -214,7 +244,10 @@ class AdvancedTradingAI {
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
       // 🧹 تنظيف دوري كل 3 دقائق (تنظيف زمني فقط للحفاظ على بيانات التعلم)
-      if (timestamp - this.liveStatus.lastCleanup > CLEANUP_INTERVAL_MS) {
+      if (
+        this.config.ENABLE_DATA_CLEANUP &&
+        timestamp - this.liveStatus.lastCleanup > CLEANUP_INTERVAL_MS
+      ) {
         console.log(`🧹 Scheduled cleanup triggered (3 mins)...`);
         try {
           // 1️⃣ تنظيف البيانات القديمة فقط (كل 20 يوم)
@@ -289,6 +322,25 @@ class AdvancedTradingAI {
       finalSignal,
       status,
     };
+  }
+
+  hasDirectionalOrderBookSupport(analysis) {
+    const side = analysis?.side;
+    if (!analysis?._rawData?.orderBook) return false;
+
+    const expectedSignal =
+      side === SIGNALS.LONG
+        ? "Order Book يميل لـ LONG"
+        : side === SIGNALS.SHORT
+          ? "Order Book يميل لـ SHORT"
+          : null;
+
+    if (!expectedSignal) return false;
+
+    const signals = Array.isArray(analysis?.signals) ? analysis.signals : [];
+    return signals.some(
+      (signal) => typeof signal === "string" && signal.includes(expectedSignal),
+    );
   }
 
   logModeBanner() {
@@ -417,6 +469,41 @@ class AdvancedTradingAI {
             confidence: decision.trendConf,
           };
           analysis.trendAligned = isAligned(decision.trendSide, analysis.side);
+
+          // 🔒 Quality gates قبل فتح الصفقة
+          if (decision.entryConf < this.config.MIN_CONFIDENCE) {
+            console.log(
+              `⏭️ [${symbol}] Skip: low entry confidence ${decision.entryConf.toFixed(1)}% < ${this.config.MIN_CONFIDENCE}%`,
+            );
+            return;
+          }
+
+          if (decision.trendConf < this.config.MIN_TREND_CONFIDENCE) {
+            console.log(
+              `⏭️ [${symbol}] Skip: weak trend confidence ${decision.trendConf.toFixed(1)}% < ${this.config.MIN_TREND_CONFIDENCE}%`,
+            );
+            return;
+          }
+
+          if (analysis.side === SIGNALS.LONG && !this.config.ALLOW_LONGS) {
+            console.log(`⏭️ [${symbol}] Skip: LONG entries disabled`);
+            return;
+          }
+
+          if (analysis.side === SIGNALS.SHORT && !this.config.ALLOW_SHORTS) {
+            console.log(`⏭️ [${symbol}] Skip: SHORT entries disabled`);
+            return;
+          }
+
+          if (
+            this.config.REQUIRE_ORDERBOOK_CONFIRMATION &&
+            !this.hasDirectionalOrderBookSupport(analysis)
+          ) {
+            console.log(
+              `⏭️ [${symbol}] Skip: no directional Order Book confirmation for ${analysis.side}`,
+            );
+            return;
+          }
 
           const trade = this.tradeManager.openTrade(
             symbol,
@@ -787,7 +874,13 @@ class AdvancedTradingAI {
     // 💾 تهيئة Database
     console.log("💾 Initializing Database...");
     await this.database.initialize();
-    await this.database.cleanOldData(this.config.DATA_RETENTION_DAYS);
+    if (this.config.ENABLE_DATA_CLEANUP) {
+      await this.database.cleanOldData(this.config.DATA_RETENTION_DAYS);
+    } else {
+      console.log(
+        "🛡️ Data cleanup disabled (ENABLE_DATA_CLEANUP=false) - preserving full learning history",
+      );
+    }
     // ✅ إصلاح: await للـ getStats لأنه async الآن (SQLite)
     const dbStats = await this.database.getStats();
     console.log(

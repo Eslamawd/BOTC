@@ -65,8 +65,10 @@ class TradeManager {
 
   getAtrValue(analysis, price) {
     const atr = Number(analysis?.indicators?.atr);
-    if (Number.isFinite(atr) && atr > 0) return atr;
-    return price * 0.005;
+    const baseAtr = Number.isFinite(atr) && atr > 0 ? atr : price * 0.005;
+    const atrFloorPct = Number(this.config.ATR_MIN_PCT || 0.005);
+    const atrFloor = price * atrFloorPct;
+    return Math.max(baseAtr, atrFloor);
   }
 
   findOrderBookWalls(orderBook, currentPrice) {
@@ -131,6 +133,8 @@ class TradeManager {
   calculateSmartLevels(entryPrice, analysis, side) {
     const isLong = isLongSignal(side);
     const atr = this.getAtrValue(analysis, entryPrice);
+    const minStopDistancePct = Number(this.config.MIN_STOP_DISTANCE_PCT || 0.006);
+    const minStopDistance = entryPrice * minStopDistancePct;
 
     const baseTakeProfit = isLong
       ? entryPrice + atr * 2.5
@@ -167,9 +171,19 @@ class TradeManager {
     if (isLong) {
       if (takeProfit <= entryPrice) takeProfit = entryPrice + atr * 0.5;
       if (stopLoss >= entryPrice) stopLoss = entryPrice - atr * 0.5;
+
+      const maxAllowedStopLoss = entryPrice - minStopDistance;
+      if (stopLoss > maxAllowedStopLoss) {
+        stopLoss = maxAllowedStopLoss;
+      }
     } else {
       if (takeProfit >= entryPrice) takeProfit = entryPrice - atr * 0.5;
       if (stopLoss <= entryPrice) stopLoss = entryPrice + atr * 0.5;
+
+      const minAllowedStopLoss = entryPrice + minStopDistance;
+      if (stopLoss < minAllowedStopLoss) {
+        stopLoss = minAllowedStopLoss;
+      }
     }
 
     return {
@@ -254,6 +268,10 @@ class TradeManager {
     const side = trade.side || ORDER_ACTIONS.BUY;
     const isLong = isLongSignal(side);
     const atr = Number(trade.atr) > 0 ? trade.atr : 0;
+    const minTrailDistancePct = Number(
+      this.config.TRAILING_MIN_DISTANCE_PCT || 0.005,
+    );
+    const minTrailDistance = trade.entryPrice * minTrailDistancePct;
     const breakEvenTrigger = atr;
     const standardTrailMultiplier = 1.2;
     const aggressiveTrailMultiplier = 0.6;
@@ -282,8 +300,9 @@ class TradeManager {
               ? aggressiveTrailMultiplier
               : standardTrailMultiplier)
           : Math.abs(trade.entryPrice - trade.stopLoss);
+      const safeTrailDistance = Math.max(trailDistance, minTrailDistance);
 
-      const candidateStop = trade.highestPrice - trailDistance;
+      const candidateStop = trade.highestPrice - safeTrailDistance;
       if (candidateStop > trade.trailingStopPrice) {
         trade.trailingStopPrice = candidateStop;
       }
@@ -324,8 +343,9 @@ class TradeManager {
               ? aggressiveTrailMultiplier
               : standardTrailMultiplier)
           : Math.abs(trade.stopLoss - trade.entryPrice);
+      const safeTrailDistance = Math.max(trailDistance, minTrailDistance);
 
-      const candidateStop = trade.lowestPrice + trailDistance;
+      const candidateStop = trade.lowestPrice + safeTrailDistance;
       if (candidateStop < trade.trailingStopPrice) {
         trade.trailingStopPrice = candidateStop;
       }

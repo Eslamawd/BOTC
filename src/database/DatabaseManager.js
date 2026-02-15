@@ -707,30 +707,9 @@ class DatabaseManager {
     if (!this.initialized) return;
 
     try {
-      const startTime = Date.now();
-
-      // حذف التحليلات الخاسرة (profitLoss < 0)
-      const analysesResult = await this.runQuery(
-        `DELETE FROM analyses WHERE actualOutcome = 'LOSS' OR profitLoss < 0`,
-      );
-
-      // حذف الصفقات الخاسرة
-      const tradesResult = await this.runQuery(
-        `DELETE FROM trades WHERE profitLoss < 0 OR status = 'CLOSED' AND profitLossPercent < 0`,
-      );
-
-      // VACUUM لتحرير المساحة
-      await this.runQuery("VACUUM");
-
-      const duration = Date.now() - startTime;
-
       console.log(
-        `🔥 Aggressive cleanup (${duration}ms) | Deleted losing records:`,
+        "🛡️ deleteLosingRecords disabled: preserving losing + winning data for AI learning and penalty modeling",
       );
-      console.log(
-        `   ❌ Losing analyses: ${analysesResult.changes} | ❌ Losing trades: ${tradesResult.changes}`,
-      );
-      console.log(`   ✅ Winning records: PRESERVED for AI learning\n`);
     } catch (error) {
       console.error("❌ Error deleting losing records:", error.message);
     }
