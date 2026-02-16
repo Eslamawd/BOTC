@@ -247,6 +247,17 @@ class DatabaseManager {
         ? {
             decision: analysis.symbolicAI.decision,
             confidence: analysis.symbolicAI.confidence,
+            marketRegime: analysis.symbolicAI.marketRegime || null,
+            decisionMetrics: analysis.symbolicAI.decisionMetrics || null,
+            reasoning: (analysis.symbolicAI.reasoning || []).slice(0, 3),
+            warnings: (analysis.symbolicAI.warnings || []).slice(0, 3),
+            supportingFactors: (
+              analysis.symbolicAI.supportingFactors || []
+            ).slice(0, 4),
+            opposingFactors: (analysis.symbolicAI.opposingFactors || []).slice(
+              0,
+              4,
+            ),
           }
         : null;
 

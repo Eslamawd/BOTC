@@ -101,11 +101,47 @@ const CONFIG = {
   // 🧠 AI Settings - معايير معقولة للـ Scalping
   MIN_CONFIDENCE: parseFloat(process.env.MIN_CONFIDENCE) || 50, // 🔒 رفع فلتر الثقة لتقليل الدخول الضعيف
   MIN_TREND_CONFIDENCE: parseFloat(process.env.MIN_TREND_CONFIDENCE) || 45,
+  MIN_DIRECTIONAL_FACTORS: parseInt(process.env.MIN_DIRECTIONAL_FACTORS) || 2,
+  ENABLE_MARKET_REGIME_ADAPTATION:
+    process.env.ENABLE_MARKET_REGIME_ADAPTATION !== "false",
+  TRENDING_MIN_CONFIDENCE:
+    parseFloat(process.env.TRENDING_MIN_CONFIDENCE) || 38,
+  RANGING_MIN_CONFIDENCE: parseFloat(process.env.RANGING_MIN_CONFIDENCE) || 46,
+  CHOPPY_MIN_CONFIDENCE: parseFloat(process.env.CHOPPY_MIN_CONFIDENCE) || 44,
+  TRENDING_MIN_TREND_CONFIDENCE:
+    parseFloat(process.env.TRENDING_MIN_TREND_CONFIDENCE) || 30,
+  RANGING_MIN_TREND_CONFIDENCE:
+    parseFloat(process.env.RANGING_MIN_TREND_CONFIDENCE) || 42,
+  CHOPPY_MIN_TREND_CONFIDENCE:
+    parseFloat(process.env.CHOPPY_MIN_TREND_CONFIDENCE) || 40,
+  ORDERBOOK_AS_REFERENCE: process.env.ORDERBOOK_AS_REFERENCE !== "false",
+  ORDERBOOK_REFERENCE_WEIGHT:
+    parseFloat(process.env.ORDERBOOK_REFERENCE_WEIGHT) || 0.08,
+  ORDERBOOK_BOOST: parseFloat(process.env.ORDERBOOK_BOOST) || 4,
+  ORDERBOOK_PENALTY: parseFloat(process.env.ORDERBOOK_PENALTY) || 6,
   REQUIRE_ORDERBOOK_CONFIRMATION:
     process.env.REQUIRE_ORDERBOOK_CONFIRMATION !== "false",
   ALLOW_LONGS: process.env.ALLOW_LONGS !== "false",
   ALLOW_SHORTS: process.env.ALLOW_SHORTS !== "false",
   VOLUME_RATIO_MIN: 1.5, // 🔧 فوليوم قوي مطلوب
+
+  // 🛡️ Risk Governor
+  ENABLE_RISK_GOVERNOR: process.env.ENABLE_RISK_GOVERNOR !== "false",
+  MAX_DAILY_LOSS_USD: parseFloat(process.env.MAX_DAILY_LOSS_USD) || 3,
+  MAX_CONSECUTIVE_LOSSES: parseInt(process.env.MAX_CONSECUTIVE_LOSSES) || 3,
+  LOSS_COOLDOWN_MINUTES: parseInt(process.env.LOSS_COOLDOWN_MINUTES) || 90,
+  RISK_REDUCTION_STEP: parseFloat(process.env.RISK_REDUCTION_STEP) || 0.2,
+  MIN_RISK_MULTIPLIER: parseFloat(process.env.MIN_RISK_MULTIPLIER) || 0.4,
+
+  // 🔍 Explainability
+  ENABLE_EXPLAINABILITY_LOG: process.env.ENABLE_EXPLAINABILITY_LOG !== "false",
+
+  // 🎛️ Trade Pacing (Target trades/day)
+  ENABLE_TRADE_PACING: process.env.ENABLE_TRADE_PACING !== "false",
+  TARGET_MAX_TRADES_PER_DAY:
+    parseInt(process.env.TARGET_MAX_TRADES_PER_DAY) || 10,
+  MIN_MINUTES_BETWEEN_ENTRIES_PER_SYMBOL:
+    parseInt(process.env.MIN_MINUTES_BETWEEN_ENTRIES_PER_SYMBOL) || 15,
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
   // PAPER/LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
@@ -206,6 +242,20 @@ class AdvancedTradingAI {
       lastCleanup: Date.now(), // ⏱️ آخر وقت تنظيف
     };
 
+    this.riskGovernor = {
+      dayKey: new Date().toISOString().slice(0, 10),
+      dailyPnl: 0,
+      consecutiveLosses: 0,
+      tradingPausedUntil: 0,
+      pauseReason: null,
+    };
+
+    this.tradePacing = {
+      dayKey: new Date().toISOString().slice(0, 10),
+      entriesToday: 0,
+      lastEntryAtBySymbol: {},
+    };
+
     config.SYMBOLS.forEach((symbol) => this.ensureSymbolData(symbol));
   }
 
@@ -217,6 +267,183 @@ class AdvancedTradingAI {
         dailyProfit: 0,
         orderBook: null,
       };
+    }
+  }
+
+  refreshRiskGovernorDay(now = Date.now()) {
+    const dayKey = new Date(now).toISOString().slice(0, 10);
+    if (this.riskGovernor.dayKey !== dayKey) {
+      this.riskGovernor.dayKey = dayKey;
+      this.riskGovernor.dailyPnl = 0;
+      this.riskGovernor.consecutiveLosses = 0;
+      this.riskGovernor.tradingPausedUntil = 0;
+      this.riskGovernor.pauseReason = null;
+      console.log("🧮 Risk Governor reset for new day");
+    }
+  }
+
+  refreshTradePacingDay(now = Date.now()) {
+    const dayKey = new Date(now).toISOString().slice(0, 10);
+    if (this.tradePacing.dayKey !== dayKey) {
+      this.tradePacing.dayKey = dayKey;
+      this.tradePacing.entriesToday = 0;
+      this.tradePacing.lastEntryAtBySymbol = {};
+      console.log("🎛️ Trade pacing reset for new day");
+    }
+  }
+
+  getAdaptiveThresholds(entryAnalysis = {}) {
+    const fallback = {
+      regimeType: "DEFAULT",
+      minEntryConfidence: Number(this.config.MIN_CONFIDENCE || 40),
+      minTrendConfidence: Number(this.config.MIN_TREND_CONFIDENCE || 35),
+    };
+
+    if (!this.config.ENABLE_MARKET_REGIME_ADAPTATION) {
+      return fallback;
+    }
+
+    const regimeType = entryAnalysis?.marketRegime?.type || "DEFAULT";
+    if (regimeType === "TRENDING") {
+      return {
+        regimeType,
+        minEntryConfidence: Number(this.config.TRENDING_MIN_CONFIDENCE || 38),
+        minTrendConfidence: Number(
+          this.config.TRENDING_MIN_TREND_CONFIDENCE || 30,
+        ),
+      };
+    }
+
+    if (regimeType === "RANGING") {
+      return {
+        regimeType,
+        minEntryConfidence: Number(this.config.RANGING_MIN_CONFIDENCE || 46),
+        minTrendConfidence: Number(
+          this.config.RANGING_MIN_TREND_CONFIDENCE || 42,
+        ),
+      };
+    }
+
+    if (regimeType === "CHOPPY") {
+      return {
+        regimeType,
+        minEntryConfidence: Number(this.config.CHOPPY_MIN_CONFIDENCE || 44),
+        minTrendConfidence: Number(
+          this.config.CHOPPY_MIN_TREND_CONFIDENCE || 40,
+        ),
+      };
+    }
+
+    return fallback;
+  }
+
+  getRiskMultiplier() {
+    if (!this.config.ENABLE_RISK_GOVERNOR) return 1;
+    const losses = Number(this.riskGovernor.consecutiveLosses || 0);
+    const reduction = losses * Number(this.config.RISK_REDUCTION_STEP || 0.2);
+    return Math.max(
+      Number(this.config.MIN_RISK_MULTIPLIER || 0.4),
+      1 - reduction,
+    );
+  }
+
+  canOpenTrade(symbol) {
+    if (!this.config.ENABLE_RISK_GOVERNOR) {
+      return { allowed: true, reason: null };
+    }
+
+    this.refreshRiskGovernorDay();
+    this.refreshTradePacingDay();
+    const now = Date.now();
+
+    if (this.config.ENABLE_TRADE_PACING) {
+      const maxTrades = Number(this.config.TARGET_MAX_TRADES_PER_DAY || 10);
+      if (this.tradePacing.entriesToday >= maxTrades) {
+        return {
+          allowed: false,
+          reason: `daily trade target reached (${this.tradePacing.entriesToday}/${maxTrades})`,
+        };
+      }
+
+      const minGapMs =
+        Number(this.config.MIN_MINUTES_BETWEEN_ENTRIES_PER_SYMBOL || 15) *
+        60 *
+        1000;
+      const lastEntryAt = this.tradePacing.lastEntryAtBySymbol[symbol] || 0;
+      if (lastEntryAt > 0 && now - lastEntryAt < minGapMs) {
+        const leftMin = Math.ceil((minGapMs - (now - lastEntryAt)) / 60000);
+        return {
+          allowed: false,
+          reason: `entry cooldown for ${symbol} (${leftMin}m left)`,
+        };
+      }
+    }
+
+    if (this.riskGovernor.tradingPausedUntil > now) {
+      const leftMin = Math.ceil(
+        (this.riskGovernor.tradingPausedUntil - now) / 60000,
+      );
+      return {
+        allowed: false,
+        reason: `risk pause active (${leftMin}m left)`,
+      };
+    }
+
+    const maxDailyLoss = Number(this.config.MAX_DAILY_LOSS_USD || 3);
+    if (this.riskGovernor.dailyPnl <= -Math.abs(maxDailyLoss)) {
+      return { allowed: false, reason: "daily loss limit reached" };
+    }
+
+    return { allowed: true, reason: null };
+  }
+
+  applyRiskGovernorOnClose(closedTrade) {
+    if (!this.config.ENABLE_RISK_GOVERNOR) return;
+
+    this.refreshRiskGovernorDay(closedTrade.exitTime || Date.now());
+    const pnl = Number(closedTrade.pnl || 0);
+    this.riskGovernor.dailyPnl += pnl;
+
+    if (pnl < 0) {
+      this.riskGovernor.consecutiveLosses += 1;
+    } else {
+      this.riskGovernor.consecutiveLosses = 0;
+    }
+
+    const maxDailyLoss = Number(this.config.MAX_DAILY_LOSS_USD || 3);
+    const maxConsecutive = Number(this.config.MAX_CONSECUTIVE_LOSSES || 3);
+    const cooldownMs =
+      Number(this.config.LOSS_COOLDOWN_MINUTES || 90) * 60 * 1000;
+
+    if (this.riskGovernor.dailyPnl <= -Math.abs(maxDailyLoss)) {
+      this.riskGovernor.tradingPausedUntil = Date.now() + cooldownMs;
+      this.riskGovernor.pauseReason = "daily-loss-limit";
+      console.warn(
+        `🛡️ Risk Governor: daily loss limit hit (${this.riskGovernor.dailyPnl.toFixed(2)} USD). Trading paused ${this.config.LOSS_COOLDOWN_MINUTES}m`,
+      );
+      return;
+    }
+
+    if (this.riskGovernor.consecutiveLosses >= maxConsecutive) {
+      this.riskGovernor.tradingPausedUntil = Date.now() + cooldownMs;
+      this.riskGovernor.pauseReason = "consecutive-losses";
+      console.warn(
+        `🛡️ Risk Governor: ${this.riskGovernor.consecutiveLosses} consecutive losses. Trading paused ${this.config.LOSS_COOLDOWN_MINUTES}m`,
+      );
+    }
+  }
+
+  logDecisionExplainability(symbol, payload = {}) {
+    if (!this.config.ENABLE_EXPLAINABILITY_LOG) return;
+    try {
+      const entry = {
+        ts: new Date().toISOString(),
+        symbol,
+        ...payload,
+      };
+      console.log(`🧠 Explainability: ${JSON.stringify(entry)}`);
+    } catch (error) {
+      console.warn(`⚠️ Explainability log error: ${error.message}`);
     }
   }
 
@@ -268,7 +495,7 @@ class AdvancedTradingAI {
 
       // عرض ملخص سريع
       console.log(
-        `\n💰 Balance: $${this.balance.toFixed(2)} | Active Trades: ${this.allTrades.filter((t) => t.status === "OPEN").length}`,
+        `\n💰 Balance: $${this.balance.toFixed(2)} | Active Trades: ${this.allTrades.filter((t) => t.status === "OPEN").length} | RG DailyPnL: $${this.riskGovernor.dailyPnl.toFixed(2)} | RG Losses: ${this.riskGovernor.consecutiveLosses} | Entries Today: ${this.tradePacing.entriesToday}/${this.config.TARGET_MAX_TRADES_PER_DAY}`,
       );
 
       // انتظار قبل التكرار التالي
@@ -438,6 +665,7 @@ class AdvancedTradingAI {
       const entry15m = await this.analyzer.analyze(candles15m, symbol);
 
       const decision = this.buildEntryDecision(trend1h, entry15m);
+      const adaptiveThresholds = this.getAdaptiveThresholds(entry15m);
 
       console.log(
         `   🕐 1h Trend: ${decision.trendSide} (${decision.trendConf.toFixed(1)}%)`,
@@ -454,13 +682,44 @@ class AdvancedTradingAI {
         entrySide: decision.entrySide,
         entryConf: decision.entryConf,
         status: decision.status,
+        regime: adaptiveThresholds.regimeType,
         updatedAt: Date.now(),
       };
+
+      this.logDecisionExplainability(symbol, {
+        stage: "pre-entry",
+        trend: {
+          side: decision.trendSide,
+          confidence: Number(decision.trendConf.toFixed(1)),
+        },
+        entry: {
+          side: decision.entrySide,
+          confidence: Number(decision.entryConf.toFixed(1)),
+        },
+        regime: entry15m?.marketRegime || {
+          type: adaptiveThresholds.regimeType,
+        },
+        adaptiveThresholds,
+        decisionMetrics: entry15m?.explainability?.decisionMetrics || null,
+        shouldEnter: decision.shouldEnter,
+      });
 
       // 6️⃣ فتح صفقة جديدة (إذا كانت الشروط مستوفاة)
       const maxTrades = this.config.MAX_CONCURRENT_TRADES_PER_SYMBOL;
       if (this.symbolData[symbol].activeTrades.length < maxTrades) {
         if (decision.shouldEnter && decision.finalSignal) {
+          const riskCheck = this.canOpenTrade(symbol);
+          if (!riskCheck.allowed) {
+            console.log(`⏭️ [${symbol}] Skip: ${riskCheck.reason}`);
+            this.logDecisionExplainability(symbol, {
+              stage: "skip",
+              reason: riskCheck.reason,
+              adaptiveThresholds,
+              riskGovernor: this.riskGovernor,
+            });
+            return;
+          }
+
           const analysis = entry15m;
           analysis.side = toPositionSide(decision.finalSignal);
           analysis.trendConfidence = decision.trendConf;
@@ -469,29 +728,50 @@ class AdvancedTradingAI {
             confidence: decision.trendConf,
           };
           analysis.trendAligned = isAligned(decision.trendSide, analysis.side);
+          analysis.riskMultiplier = this.getRiskMultiplier();
 
           // 🔒 Quality gates قبل فتح الصفقة
-          if (decision.entryConf < this.config.MIN_CONFIDENCE) {
+          if (decision.entryConf < adaptiveThresholds.minEntryConfidence) {
             console.log(
-              `⏭️ [${symbol}] Skip: low entry confidence ${decision.entryConf.toFixed(1)}% < ${this.config.MIN_CONFIDENCE}%`,
+              `⏭️ [${symbol}] Skip: low entry confidence ${decision.entryConf.toFixed(1)}% < ${adaptiveThresholds.minEntryConfidence}%`,
             );
+            this.logDecisionExplainability(symbol, {
+              stage: "skip",
+              reason: "low-entry-confidence",
+              adaptiveThresholds,
+              confidence: Number(decision.entryConf.toFixed(1)),
+            });
             return;
           }
 
-          if (decision.trendConf < this.config.MIN_TREND_CONFIDENCE) {
+          if (decision.trendConf < adaptiveThresholds.minTrendConfidence) {
             console.log(
-              `⏭️ [${symbol}] Skip: weak trend confidence ${decision.trendConf.toFixed(1)}% < ${this.config.MIN_TREND_CONFIDENCE}%`,
+              `⏭️ [${symbol}] Skip: weak trend confidence ${decision.trendConf.toFixed(1)}% < ${adaptiveThresholds.minTrendConfidence}%`,
             );
+            this.logDecisionExplainability(symbol, {
+              stage: "skip",
+              reason: "weak-trend-confidence",
+              adaptiveThresholds,
+              trendConfidence: Number(decision.trendConf.toFixed(1)),
+            });
             return;
           }
 
           if (analysis.side === SIGNALS.LONG && !this.config.ALLOW_LONGS) {
             console.log(`⏭️ [${symbol}] Skip: LONG entries disabled`);
+            this.logDecisionExplainability(symbol, {
+              stage: "skip",
+              reason: "long-disabled",
+            });
             return;
           }
 
           if (analysis.side === SIGNALS.SHORT && !this.config.ALLOW_SHORTS) {
             console.log(`⏭️ [${symbol}] Skip: SHORT entries disabled`);
+            this.logDecisionExplainability(symbol, {
+              stage: "skip",
+              reason: "short-disabled",
+            });
             return;
           }
 
@@ -502,6 +782,10 @@ class AdvancedTradingAI {
             console.log(
               `⏭️ [${symbol}] Skip: no directional Order Book confirmation for ${analysis.side}`,
             );
+            this.logDecisionExplainability(symbol, {
+              stage: "skip",
+              reason: "missing-orderbook-confirmation",
+            });
             return;
           }
 
@@ -515,15 +799,34 @@ class AdvancedTradingAI {
 
           if (trade) {
             trade.executionMode = executeTrades ? "REAL" : "SIM";
+            trade.marketRegime = analysis.marketRegime || null;
+            trade.entryExplainability = analysis.explainability || null;
             this.symbolData[symbol].activeTrades.push(trade);
             this.balance -= trade.positionSize;
+            this.refreshTradePacingDay();
+            this.tradePacing.entriesToday += 1;
+            this.tradePacing.lastEntryAtBySymbol[symbol] = Date.now();
 
             const action = toOrderAction(analysis.side) || decision.finalSignal;
             const emoji = action === ORDER_ACTIONS.BUY ? "🟢" : "🔴";
 
             console.log(
-              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Timeout: ${trade.timeoutHours}h | Mode: ${trade.executionMode}`,
+              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Regime: ${adaptiveThresholds.regimeType} | Risk x${analysis.riskMultiplier.toFixed(2)} | Timeout: ${trade.timeoutHours}h | Mode: ${trade.executionMode}`,
             );
+
+            this.logDecisionExplainability(symbol, {
+              stage: "entry",
+              action,
+              confidence: Number(analysis.confidence),
+              regime: analysis.marketRegime || {
+                type: adaptiveThresholds.regimeType,
+              },
+              adaptiveThresholds,
+              riskMultiplier: analysis.riskMultiplier,
+              stopLoss: Number(trade.stopLoss.toFixed(6)),
+              takeProfit: Number(trade.takeProfit.toFixed(6)),
+              decisionMetrics: analysis.explainability?.decisionMetrics || null,
+            });
 
             // حفظ في Database
             if (this.database && this.database.initialized) {
@@ -579,6 +882,22 @@ class AdvancedTradingAI {
     this.performance.totalConfidence += closedTrade.confidence || 0;
     if (closedTrade.profitPercent > 0) this.performance.wins += 1;
     else this.performance.losses += 1;
+
+    this.applyRiskGovernorOnClose(closedTrade);
+    this.logDecisionExplainability(symbol, {
+      stage: "close",
+      side: closedTrade.side,
+      reason,
+      profitPercent: Number(closedTrade.profitPercent.toFixed(3)),
+      pnlUsd: Number(closedTrade.pnl.toFixed(4)),
+      regimeAtEntry: closedTrade.marketRegime || null,
+      riskGovernor: {
+        dailyPnl: Number(this.riskGovernor.dailyPnl.toFixed(4)),
+        consecutiveLosses: this.riskGovernor.consecutiveLosses,
+        pausedUntil: this.riskGovernor.tradingPausedUntil || 0,
+        pauseReason: this.riskGovernor.pauseReason,
+      },
+    });
 
     // 💾 حفظ الصفقة المغلقة في Database
     if (this.database && this.database.initialized) {

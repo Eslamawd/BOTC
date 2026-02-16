@@ -29,6 +29,12 @@ class AdvancedAIAnalyzer {
         MIN_PATTERN_STRENGTH: 0.5,
         MIN_CORRELATION: 0.5,
         MIN_PROBABILITY: this.config.MIN_CONFIDENCE / 100 || 0.65,
+        MIN_DIRECTIONAL_FACTORS: this.config.MIN_DIRECTIONAL_FACTORS || 2,
+        ORDERBOOK_AS_REFERENCE: this.config.ORDERBOOK_AS_REFERENCE !== false,
+        ORDERBOOK_REFERENCE_WEIGHT:
+          this.config.ORDERBOOK_REFERENCE_WEIGHT || 0.08,
+        ORDERBOOK_BOOST: this.config.ORDERBOOK_BOOST || 4,
+        ORDERBOOK_PENALTY: this.config.ORDERBOOK_PENALTY || 6,
         LOOKBACK_PERIOD: 100,
         PREDICTION_HORIZON: 5,
       },
@@ -149,14 +155,18 @@ class AdvancedAIAnalyzer {
         signals: decision.supportingFactors,
         learnedPattern: decision.learnedPattern || null,
         failingPenaltyApplied: decision.learnedPattern?.category === "failing",
+        marketRegime: decision.marketRegime || null,
+        explainability: {
+          reasoning: decision.reasoning || [],
+          warnings: decision.warnings || [],
+          supportingFactors: decision.supportingFactors || [],
+          opposingFactors: decision.opposingFactors || [],
+          decisionMetrics: decision.decisionMetrics || null,
+        },
 
         // للتوافق مع الكود القديم
-        shouldBuy:
-          decision.action === SIGNALS.LONG &&
-          decision.confidence >= this.config.MIN_CONFIDENCE,
-        shouldSell:
-          decision.action === SIGNALS.SHORT &&
-          decision.confidence >= this.config.MIN_CONFIDENCE,
+        shouldBuy: decision.action === SIGNALS.LONG,
+        shouldSell: decision.action === SIGNALS.SHORT,
 
         // معلومات إضافية
         analysis: {
@@ -187,7 +197,17 @@ class AdvancedAIAnalyzer {
             : null,
           whale: whaleActivity.length > 0,
           volume: volumeProfile,
-          symbolicAI: decision.learnedPattern || null,
+          symbolicAI: {
+            decision: decision.action,
+            confidence: decision.confidence,
+            learnedPattern: decision.learnedPattern || null,
+            marketRegime: decision.marketRegime || null,
+            decisionMetrics: decision.decisionMetrics || null,
+            reasoning: (decision.reasoning || []).slice(0, 4),
+            warnings: (decision.warnings || []).slice(0, 4),
+            supportingFactors: (decision.supportingFactors || []).slice(0, 6),
+            opposingFactors: (decision.opposingFactors || []).slice(0, 6),
+          },
         },
       };
 

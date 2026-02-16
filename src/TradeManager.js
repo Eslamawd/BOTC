@@ -206,9 +206,11 @@ class TradeManager {
     if (activeTradesCount >= maxConcurrent) return null;
 
     // حجم الصفقة من الرصيد الأولي
-    const riskAmount =
+    const rawRiskAmount =
       (this.config.INITIAL_BALANCE * this.config.RISK_PER_TRADE) /
       this.config.SYMBOLS.length;
+    const riskMultiplier = Math.max(0.1, Number(analysis?.riskMultiplier || 1));
+    const riskAmount = rawRiskAmount * riskMultiplier;
 
     // 🎯 Futures: حجم الصفقة = رأس المال × الرافعة
     const positionSize =
@@ -231,6 +233,8 @@ class TradeManager {
       entryTime: Date.now(),
       positionSize,
       quantity, // إضافة quantity للـ database
+      riskMultiplier,
+      baseRiskAmount: rawRiskAmount,
 
       // Trailing mechanism
       highestPrice: price, // لـ LONG

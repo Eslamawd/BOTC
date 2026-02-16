@@ -21,6 +21,11 @@ class SymbolicAI {
       MIN_PATTERN_STRENGTH: 0.3, // 🔧 خفضنا أكثر
       MIN_CORRELATION: 0.3, // 🔧 خفضنا أكثر
       MIN_PROBABILITY: 0.15, // 🔧 خفضنا من 0.35 لـ 15%
+      ORDERBOOK_AS_REFERENCE: true,
+      ORDERBOOK_REFERENCE_WEIGHT: 0.08,
+      ORDERBOOK_PRIMARY_WEIGHT: 0.2,
+      ORDERBOOK_BOOST: 4,
+      ORDERBOOK_PENALTY: 6,
       LOOKBACK_PERIOD: 100,
       PREDICTION_HORIZON: 5,
       ...config,
@@ -115,7 +120,7 @@ class SymbolicAI {
       orderBookModel,
       whalePatterns,
       pricePrediction,
-      indicators,
+      indicatorCorrelation,
     });
 
     // 9️⃣ 🧠 تطبيق الأنماط المتعلمة من قاعدة البيانات
@@ -546,11 +551,15 @@ class SymbolicAI {
       pricePrediction,
     } = analysis;
 
+    const orderBookWeight = this.config.ORDERBOOK_AS_REFERENCE
+      ? Number(this.config.ORDERBOOK_REFERENCE_WEIGHT || 0.08)
+      : Number(this.config.ORDERBOOK_PRIMARY_WEIGHT || 0.2);
+
     // الأوزان لكل عامل
     const weights = {
       candles: 0.15,
       volume: 0.25, // الفوليوم مهم جداً
-      orderBook: 0.2, // Order book مهم
+      orderBook: orderBookWeight, // Order Book: مرجع أو أساسي حسب الإعداد
       whales: 0.15, // الحيتان مؤثرة
       indicators: 0.15, // المؤشرات
       prediction: 0.1, // التنبؤ
@@ -623,7 +632,7 @@ class SymbolicAI {
       orderBookModel,
       whalePatterns,
       pricePrediction,
-      indicators,
+      indicatorCorrelation,
     } = analysisData;
 
     // القرار الأساسي
@@ -634,6 +643,18 @@ class SymbolicAI {
       warnings: [],
       supportingFactors: [],
       opposingFactors: [],
+      marketRegime: this.classifyMarketRegime({
+        candlePatterns,
+        volumeAnalysis,
+        indicatorCorrelation,
+        pricePrediction,
+      }),
+      decisionMetrics: {
+        bullishFactors: 0,
+        bearishFactors: 0,
+        minDirectionalFactors: 0,
+        minThreshold: 0,
+      },
     };
 
     // قاعدة 1: احتمالية النجاح يجب أن تكون أعلى من الحد الأدنى
@@ -684,12 +705,12 @@ class SymbolicAI {
     }
 
     // قاعدة 5: توافق المؤشرات
-    if (indicators && indicators.agreement < 0.6) {
+    if (indicatorCorrelation && indicatorCorrelation.agreement < 0.6) {
       decision.warnings.push("المؤشرات غير متفقة");
       decision.confidence -= 10;
-    } else if (indicators && indicators.agreement > 0.8) {
+    } else if (indicatorCorrelation && indicatorCorrelation.agreement > 0.8) {
       decision.supportingFactors.push(
-        `توافق عالي بين المؤشرات: ${(indicators.agreement * 100).toFixed(0)}%`,
+        `توافق عالي بين المؤشرات: ${(indicatorCorrelation.agreement * 100).toFixed(0)}%`,
       );
     }
 
@@ -703,41 +724,150 @@ class SymbolicAI {
     }
 
     // القرار النهائي بناءً على الإجماع
+    const minDirectionalFactors = Math.max(
+      1,
+      Number(this.config.MIN_DIRECTIONAL_FACTORS || 2),
+    );
+    const useOrderBookAsReference = this.config.ORDERBOOK_AS_REFERENCE === true;
+    const includeOrderBookInConsensus = !useOrderBookAsReference;
+
     const bullishFactors = [
       candlePatterns && candlePatterns.trend === "BULLISH",
-      orderBookModel && orderBookModel.signal === "BULLISH",
+      includeOrderBookInConsensus &&
+        orderBookModel &&
+        orderBookModel.signal === "BULLISH",
       whalePatterns && whalePatterns.signal === "BULLISH",
-      indicators && indicators.consensus === "BULLISH",
+      indicatorCorrelation && indicatorCorrelation.consensus === "BULLISH",
       predictedDirection === "UP",
     ].filter(Boolean).length;
 
     const bearishFactors = [
       candlePatterns && candlePatterns.trend === "BEARISH",
-      orderBookModel && orderBookModel.signal === "BEARISH",
+      includeOrderBookInConsensus &&
+        orderBookModel &&
+        orderBookModel.signal === "BEARISH",
       whalePatterns && whalePatterns.signal === "BEARISH",
-      indicators && indicators.consensus === "BEARISH",
+      indicatorCorrelation && indicatorCorrelation.consensus === "BEARISH",
       predictedDirection === "DOWN",
     ].filter(Boolean).length;
 
-    // تحديد الإجراء - خفضنا العوامل المطلوبة من 3 لـ 2 للbacktest
+    decision.decisionMetrics = {
+      bullishFactors,
+      bearishFactors,
+      minDirectionalFactors,
+      minThreshold,
+    };
+
+    const totalDirectionalSlots = includeOrderBookInConsensus ? 5 : 4;
+
+    // تحديد الإجراء - عدد العوامل المطلوبة قابل للضبط عبر MIN_DIRECTIONAL_FACTORS
     if (
-      bullishFactors >= 2 &&
+      bullishFactors >= minDirectionalFactors &&
       decision.confidence >= minThreshold // استخدم نفس الـ minThreshold
     ) {
       decision.action = "LONG";
-      decision.reasoning.push(`${bullishFactors} عوامل صاعدة من أصل 5`);
+      decision.reasoning.push(
+        `${bullishFactors} عوامل صاعدة من أصل ${totalDirectionalSlots}`,
+      );
     } else if (
-      bearishFactors >= 2 &&
+      bearishFactors >= minDirectionalFactors &&
       decision.confidence >= minThreshold // استخدم نفس الـ minThreshold
     ) {
       decision.action = "SHORT";
-      decision.reasoning.push(`${bearishFactors} عوامل هابطة من أصل 5`);
+      decision.reasoning.push(
+        `${bearishFactors} عوامل هابطة من أصل ${totalDirectionalSlots}`,
+      );
     } else {
       decision.action = "HOLD";
       decision.reasoning.push("عدم توفر إجماع كافي للدخول");
     }
 
+    // Order Book كمرجع فقط: boost/penalty بعد القرار النهائي
+    if (
+      orderBookModel &&
+      useOrderBookAsReference &&
+      decision.action !== "HOLD"
+    ) {
+      const obSignal = orderBookModel.signal;
+      const boost = Number(this.config.ORDERBOOK_BOOST || 4);
+      const penalty = Number(this.config.ORDERBOOK_PENALTY || 6);
+
+      const alignedLong = decision.action === "LONG" && obSignal === "BULLISH";
+      const alignedShort =
+        decision.action === "SHORT" && obSignal === "BEARISH";
+      const oppositeLong = decision.action === "LONG" && obSignal === "BEARISH";
+      const oppositeShort =
+        decision.action === "SHORT" && obSignal === "BULLISH";
+
+      if (alignedLong || alignedShort) {
+        decision.confidence += boost;
+        decision.supportingFactors.push(
+          `Order Book مرجعي داعم (+${boost.toFixed(1)}%)`,
+        );
+      } else if (oppositeLong || oppositeShort) {
+        decision.confidence -= penalty;
+        decision.warnings.push(
+          `Order Book مرجعي معاكس (-${penalty.toFixed(1)}%)`,
+        );
+        decision.opposingFactors.push(
+          `Order Book عكسي بالنسبة لاتجاه ${decision.action}`,
+        );
+      }
+    }
+
+    decision.confidence = Math.max(0, Math.min(100, decision.confidence));
+
     return decision;
+  }
+
+  classifyMarketRegime({
+    candlePatterns,
+    volumeAnalysis,
+    indicatorCorrelation,
+    pricePrediction,
+  }) {
+    const trendStrength = Number(candlePatterns?.trendStrength || 0);
+    const momentumAbs = Math.abs(Number(candlePatterns?.momentum || 0));
+    const indicatorAgreement = Number(indicatorCorrelation?.agreement || 0);
+    const volumeRatio = Number(volumeAnalysis?.volumeRatio || 1);
+    const predictionConfidence = Number(pricePrediction?.confidence || 0);
+
+    let type = "CHOPPY";
+    if (
+      trendStrength >= 0.55 &&
+      momentumAbs >= 0.008 &&
+      indicatorAgreement >= 0.55
+    ) {
+      type = "TRENDING";
+    } else if (
+      trendStrength <= 0.35 ||
+      momentumAbs < 0.004 ||
+      indicatorAgreement < 0.45
+    ) {
+      type = "RANGING";
+    }
+
+    const score = Math.max(
+      0,
+      Math.min(
+        100,
+        (trendStrength * 40 +
+          Math.min(momentumAbs * 2500, 30) +
+          indicatorAgreement * 20 +
+          Math.min(volumeRatio * 5, 10) +
+          predictionConfidence * 5) *
+          1,
+      ),
+    );
+
+    return {
+      type,
+      score: Number(score.toFixed(1)),
+      trendStrength: Number(trendStrength.toFixed(3)),
+      momentumAbs: Number(momentumAbs.toFixed(4)),
+      indicatorAgreement: Number(indicatorAgreement.toFixed(3)),
+      volumeRatio: Number(volumeRatio.toFixed(2)),
+    };
   }
 
   /**
