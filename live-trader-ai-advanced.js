@@ -99,6 +99,10 @@ const CONFIG = {
   USE_TRIGGER_TIMEFRAME: process.env.USE_TRIGGER_TIMEFRAME !== "false",
   ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND:
     process.env.ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND !== "false",
+  ALLOW_TRIGGER_ONLY_ENTRIES:
+    process.env.ALLOW_TRIGGER_ONLY_ENTRIES !== "false",
+  TRIGGER_ONLY_MIN_CONFIDENCE:
+    parseFloat(process.env.TRIGGER_ONLY_MIN_CONFIDENCE) || 18,
   TRIGGER_CONFIDENCE_WEIGHT:
     parseFloat(process.env.TRIGGER_CONFIDENCE_WEIGHT) || 0.4,
   REQUIRE_TREND_CONFIRMATION: true, // يجب توافق الاتجاهين
@@ -579,6 +583,32 @@ class AdvancedTradingAI {
         shouldEnter = true;
         finalSignal = ORDER_ACTIONS.SELL;
         mode = "override";
+      } else if (
+        this.config.ALLOW_TRIGGER_ONLY_ENTRIES &&
+        useTrigger &&
+        !entryLong &&
+        !entryShort &&
+        triggerAlignedLong &&
+        triggerConf >= this.config.TRIGGER_ONLY_MIN_CONFIDENCE &&
+        (trendSide === SIGNALS.HOLD ||
+          this.config.ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND)
+      ) {
+        shouldEnter = true;
+        finalSignal = ORDER_ACTIONS.BUY;
+        mode = "trigger-only";
+      } else if (
+        this.config.ALLOW_TRIGGER_ONLY_ENTRIES &&
+        useTrigger &&
+        !entryLong &&
+        !entryShort &&
+        triggerAlignedShort &&
+        triggerConf >= this.config.TRIGGER_ONLY_MIN_CONFIDENCE &&
+        (trendSide === SIGNALS.HOLD ||
+          this.config.ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND)
+      ) {
+        shouldEnter = true;
+        finalSignal = ORDER_ACTIONS.SELL;
+        mode = "trigger-only";
       }
     } else {
       if (entryLong && (!useTrigger || triggerAlignedLong)) {
