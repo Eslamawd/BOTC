@@ -107,6 +107,9 @@ const CONFIG = {
   // 🧠 AI Settings - معايير معقولة للـ Scalping
   MIN_CONFIDENCE: parseFloat(process.env.MIN_CONFIDENCE) || 50, // 🔒 رفع فلتر الثقة لتقليل الدخول الضعيف
   MIN_TREND_CONFIDENCE: parseFloat(process.env.MIN_TREND_CONFIDENCE) || 45,
+  MIN_SUCCESS_PROBABILITY:
+    parseFloat(process.env.MIN_SUCCESS_PROBABILITY) || 0.18,
+  ACTION_MIN_CONFIDENCE: parseFloat(process.env.ACTION_MIN_CONFIDENCE) || 20,
   MIN_DIRECTIONAL_FACTORS: parseInt(process.env.MIN_DIRECTIONAL_FACTORS) || 2,
   ENABLE_MARKET_REGIME_ADAPTATION:
     process.env.ENABLE_MARKET_REGIME_ADAPTATION !== "false",

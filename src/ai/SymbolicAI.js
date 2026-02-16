@@ -660,10 +660,18 @@ class SymbolicAI {
     // قاعدة 1: احتمالية النجاح يجب أن تكون أعلى من الحد الأدنى
     // ✅ استخدم نفس الـ MIN_CONFIDENCE (10%) بدلاً من MIN_PROBABILITY (15%)
     const minThreshold = Math.max(this.config.MIN_PROBABILITY * 100, 10);
+    const actionMinThreshold = Math.max(
+      10,
+      Number(this.config.ACTION_MIN_CONFIDENCE || minThreshold),
+    );
+    decision.decisionMetrics.minThreshold = minThreshold;
+    decision.decisionMetrics.actionMinThreshold = actionMinThreshold;
+
     if (successProbability < minThreshold) {
       decision.warnings.push(
         `احتمالية منخفضة: ${successProbability.toFixed(1)}% (الحد الأدنى: ${minThreshold}%)`,
       );
+      decision.reasoning.push("HOLD بسبب انخفاض احتمال النجاح الأساسي");
       return decision; // HOLD
     }
 
@@ -756,6 +764,7 @@ class SymbolicAI {
       bearishFactors,
       minDirectionalFactors,
       minThreshold,
+      actionMinThreshold,
     };
 
     const totalDirectionalSlots = includeOrderBookInConsensus ? 5 : 4;
@@ -763,7 +772,7 @@ class SymbolicAI {
     // تحديد الإجراء - عدد العوامل المطلوبة قابل للضبط عبر MIN_DIRECTIONAL_FACTORS
     if (
       bullishFactors >= minDirectionalFactors &&
-      decision.confidence >= minThreshold // استخدم نفس الـ minThreshold
+      decision.confidence >= actionMinThreshold
     ) {
       decision.action = "LONG";
       decision.reasoning.push(
@@ -771,7 +780,7 @@ class SymbolicAI {
       );
     } else if (
       bearishFactors >= minDirectionalFactors &&
-      decision.confidence >= minThreshold // استخدم نفس الـ minThreshold
+      decision.confidence >= actionMinThreshold
     ) {
       decision.action = "SHORT";
       decision.reasoning.push(
