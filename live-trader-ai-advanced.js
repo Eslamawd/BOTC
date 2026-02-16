@@ -95,6 +95,12 @@ const CONFIG = {
   // 📊 Multi-Timeframe Analysis
   TIMEFRAME_TREND: "1h", // ⏰ الساعة - تحديد الاتجاه العام
   TIMEFRAME_ENTRY: "15m", // ⏰ الربع ساعة - توقيت الدخول
+  TIMEFRAME_TRIGGER: process.env.TIMEFRAME_TRIGGER || "5m", // ⏰ 5 دقائق - trigger للدخول
+  USE_TRIGGER_TIMEFRAME: process.env.USE_TRIGGER_TIMEFRAME !== "false",
+  ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND:
+    process.env.ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND !== "false",
+  TRIGGER_CONFIDENCE_WEIGHT:
+    parseFloat(process.env.TRIGGER_CONFIDENCE_WEIGHT) || 0.4,
   REQUIRE_TREND_CONFIRMATION: true, // يجب توافق الاتجاهين
   REPORT_INTERVAL_HOURS: 3, // تقرير لايف على التليجرام كل 3 ساعات
 
@@ -506,28 +512,76 @@ class AdvancedTradingAI {
     }
   }
 
-  buildEntryDecision(trend1h, entry15m) {
+  buildEntryDecision(trend1h, entry15m, trigger5m = null) {
     const trendSide = trend1h?.side || SIGNALS.HOLD;
     const trendConf = Number(trend1h?.confidence || 0);
     const entrySide = entry15m?.side || SIGNALS.HOLD;
-    const entryConf = Number(entry15m?.confidence || 0);
+    const baseEntryConf = Number(entry15m?.confidence || 0);
+    const triggerSide = trigger5m?.side || SIGNALS.HOLD;
+    const triggerConf = Number(trigger5m?.confidence || 0);
+    const useTrigger = this.config.USE_TRIGGER_TIMEFRAME && !!trigger5m;
+
+    const triggerWeight = Math.max(
+      0,
+      Math.min(1, Number(this.config.TRIGGER_CONFIDENCE_WEIGHT || 0.4)),
+    );
+    const entryWeight = 1 - triggerWeight;
+
+    const triggerAlignedLong =
+      triggerSide === SIGNALS.LONG || trigger5m?.shouldBuy === true;
+    const triggerAlignedShort =
+      triggerSide === SIGNALS.SHORT || trigger5m?.shouldSell === true;
+    const entryLong = entry15m?.shouldBuy === true;
+    const entryShort = entry15m?.shouldSell === true;
+
+    const entryConf = useTrigger
+      ? baseEntryConf * entryWeight + triggerConf * triggerWeight
+      : baseEntryConf;
 
     let shouldEnter = false;
     let finalSignal = null;
+    let mode = "strict";
 
     if (this.config.REQUIRE_TREND_CONFIRMATION) {
-      if (trendSide === SIGNALS.LONG && entry15m?.shouldBuy) {
+      const longWithTrend =
+        trendSide === SIGNALS.LONG &&
+        entryLong &&
+        (!useTrigger || triggerAlignedLong);
+      const shortWithTrend =
+        trendSide === SIGNALS.SHORT &&
+        entryShort &&
+        (!useTrigger || triggerAlignedShort);
+
+      if (longWithTrend) {
         shouldEnter = true;
         finalSignal = ORDER_ACTIONS.BUY;
-      } else if (trendSide === SIGNALS.SHORT && entry15m?.shouldSell) {
+      } else if (shortWithTrend) {
         shouldEnter = true;
         finalSignal = ORDER_ACTIONS.SELL;
-      }
-    } else {
-      if (entry15m?.shouldBuy) {
+      } else if (
+        this.config.ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND &&
+        useTrigger &&
+        entryLong &&
+        triggerAlignedLong
+      ) {
         shouldEnter = true;
         finalSignal = ORDER_ACTIONS.BUY;
-      } else if (entry15m?.shouldSell) {
+        mode = "override";
+      } else if (
+        this.config.ALLOW_TRIGGER_OVERRIDE_AGAINST_TREND &&
+        useTrigger &&
+        entryShort &&
+        triggerAlignedShort
+      ) {
+        shouldEnter = true;
+        finalSignal = ORDER_ACTIONS.SELL;
+        mode = "override";
+      }
+    } else {
+      if (entryLong && (!useTrigger || triggerAlignedLong)) {
+        shouldEnter = true;
+        finalSignal = ORDER_ACTIONS.BUY;
+      } else if (entryShort && (!useTrigger || triggerAlignedShort)) {
         shouldEnter = true;
         finalSignal = ORDER_ACTIONS.SELL;
       }
@@ -545,6 +599,11 @@ class AdvancedTradingAI {
       trendConf,
       entrySide,
       entryConf,
+      baseEntryConf,
+      triggerSide,
+      triggerConf,
+      useTrigger,
+      mode,
       shouldEnter,
       finalSignal,
       status,
@@ -626,12 +685,22 @@ class AdvancedTradingAI {
         undefined,
         200,
       );
+      const candles5m = this.config.USE_TRIGGER_TIMEFRAME
+        ? await this.exchange.fetchOHLCV(
+            symbol,
+            this.config.TIMEFRAME_TRIGGER,
+            undefined,
+            200,
+          )
+        : null;
 
       if (
         !candles1h ||
         !candles15m ||
+        (this.config.USE_TRIGGER_TIMEFRAME && !candles5m) ||
         candles1h.length < 100 ||
-        candles15m.length < 100
+        candles15m.length < 100 ||
+        (this.config.USE_TRIGGER_TIMEFRAME && candles5m.length < 100)
       ) {
         console.log(`⚠️  [${symbol}] Insufficient data, skipping...`);
         return;
@@ -663,8 +732,11 @@ class AdvancedTradingAI {
       // 5️⃣ تحليل multi-timeframe
       const trend1h = await this.analyzer.analyze(candles1h, symbol);
       const entry15m = await this.analyzer.analyze(candles15m, symbol);
+      const trigger5m = this.config.USE_TRIGGER_TIMEFRAME
+        ? await this.analyzer.analyze(candles5m, symbol)
+        : null;
 
-      const decision = this.buildEntryDecision(trend1h, entry15m);
+      const decision = this.buildEntryDecision(trend1h, entry15m, trigger5m);
       const adaptiveThresholds = this.getAdaptiveThresholds(entry15m);
 
       console.log(
@@ -673,6 +745,11 @@ class AdvancedTradingAI {
       console.log(
         `   🕒 15m Entry: ${decision.entrySide} (${decision.entryConf.toFixed(1)}%)`,
       );
+      if (decision.useTrigger) {
+        console.log(
+          `   🕔 5m Trigger: ${decision.triggerSide} (${decision.triggerConf.toFixed(1)}%) | Mode: ${decision.mode}`,
+        );
+      }
 
       // تحديث live status
       this.liveStatus.lastAnalysis[symbol] = Date.now();
@@ -694,8 +771,16 @@ class AdvancedTradingAI {
         },
         entry: {
           side: decision.entrySide,
-          confidence: Number(decision.entryConf.toFixed(1)),
+          confidence: Number(decision.baseEntryConf.toFixed(1)),
         },
+        trigger: decision.useTrigger
+          ? {
+              side: decision.triggerSide,
+              confidence: Number(decision.triggerConf.toFixed(1)),
+            }
+          : null,
+        mixedConfidence: Number(decision.entryConf.toFixed(1)),
+        decisionMode: decision.mode,
         regime: entry15m?.marketRegime || {
           type: adaptiveThresholds.regimeType,
         },
@@ -813,6 +898,12 @@ class AdvancedTradingAI {
             console.log(
               `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Regime: ${adaptiveThresholds.regimeType} | Risk x${analysis.riskMultiplier.toFixed(2)} | Timeout: ${trade.timeoutHours}h | Mode: ${trade.executionMode}`,
             );
+
+            if (decision.mode === "override") {
+              console.log(
+                `⚡ [${symbol}] 5m+15m override against 1h trend activated`,
+              );
+            }
 
             this.logDecisionExplainability(symbol, {
               stage: "entry",
