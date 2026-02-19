@@ -93,6 +93,7 @@ class VolumeProfileAnalyzer {
 
     return {
       profile,
+      poc: pocPrice,
       pocPrice,
       pocVolume,
       valueArea: this.valueArea,

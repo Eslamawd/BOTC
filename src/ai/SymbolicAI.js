@@ -121,16 +121,22 @@ class SymbolicAI {
       whalePatterns,
       pricePrediction,
       indicatorCorrelation,
+      candles,
+      volumeProfile,
+      currentPrice,
     });
 
     // 9️⃣ 🧠 تطبيق الأنماط المتعلمة من قاعدة البيانات
-    const learnedBoost = this.applyLearnedPatterns({
-      symbol,
-      signal: finalDecision.signal,
-      confidence: finalDecision.confidence,
-      indicators,
-      volume: volumeAnalysis,
-    });
+    const learnedBoost =
+      finalDecision.action && finalDecision.action !== "HOLD"
+        ? this.applyLearnedPatterns({
+            symbol,
+            signal: finalDecision.action,
+            confidence: finalDecision.confidence,
+            indicators,
+            volume: volumeAnalysis,
+          })
+        : null;
 
     if (learnedBoost?.matched) {
       // تعزيز أو خفض الثقة بناءً على الأنماط المتعلمة
@@ -249,10 +255,14 @@ class SymbolicAI {
 
     // تحليل Volume Profile إذا كان متوفراً
     let profileStrength = 0;
-    if (volumeProfile && volumeProfile.poc) {
+    const profilePoc =
+      volumeProfile?.poc ||
+      volumeProfile?.pocPrice ||
+      volumeProfile?.valueArea?.poc;
+    if (volumeProfile && profilePoc) {
       const currentPrice = candles[candles.length - 1][4];
       const distanceFromPOC =
-        Math.abs(currentPrice - volumeProfile.poc) / currentPrice;
+        Math.abs(currentPrice - profilePoc) / currentPrice;
 
       // كلما كنا أقرب من POC، زادت القوة
       profileStrength = 1 - Math.min(distanceFromPOC * 10, 1);
@@ -633,6 +643,9 @@ class SymbolicAI {
       whalePatterns,
       pricePrediction,
       indicatorCorrelation,
+      candles,
+      volumeProfile,
+      currentPrice,
     } = analysisData;
 
     // القرار الأساسي
@@ -648,6 +661,9 @@ class SymbolicAI {
         volumeAnalysis,
         indicatorCorrelation,
         pricePrediction,
+        candles,
+        volumeProfile,
+        currentPrice,
       }),
       decisionMetrics: {
         bullishFactors: 0,
@@ -824,6 +840,10 @@ class SymbolicAI {
       }
     }
 
+    if (this.config.ENABLE_VALUE_LOCATION_FILTER !== false) {
+      this.applyValueLocationFilter(decision);
+    }
+
     decision.confidence = Math.max(0, Math.min(100, decision.confidence));
 
     return decision;
@@ -834,6 +854,9 @@ class SymbolicAI {
     volumeAnalysis,
     indicatorCorrelation,
     pricePrediction,
+    candles,
+    volumeProfile,
+    currentPrice,
   }) {
     const trendStrength = Number(candlePatterns?.trendStrength || 0);
     const momentumAbs = Math.abs(Number(candlePatterns?.momentum || 0));
@@ -869,14 +892,325 @@ class SymbolicAI {
       ),
     );
 
+    const multiDayRegime = this.classifyMultiDayRegime(candles);
+    const valueLocation = this.classifyValueLocation(
+      currentPrice,
+      volumeProfile,
+      candles,
+    );
+
+    let effectiveType = type;
+    if (multiDayRegime && multiDayRegime.confidence >= 60) {
+      effectiveType = multiDayRegime.type;
+    }
+
     return {
-      type,
+      type: effectiveType,
+      intradayType: type,
+      intradayDirection: candlePatterns?.trend || null,
       score: Number(score.toFixed(1)),
       trendStrength: Number(trendStrength.toFixed(3)),
       momentumAbs: Number(momentumAbs.toFixed(4)),
       indicatorAgreement: Number(indicatorAgreement.toFixed(3)),
       volumeRatio: Number(volumeRatio.toFixed(2)),
+      multiDayType: multiDayRegime?.type || null,
+      multiDayConfidence: multiDayRegime?.confidence || null,
+      multiDayDirection: multiDayRegime?.direction || null,
+      multiDayMovePct: multiDayRegime?.movePct || null,
+      barsPerDay: multiDayRegime?.barsPerDay || null,
+      lookbackDays: multiDayRegime?.lookbackDays || null,
+      valueLocation,
     };
+  }
+
+  inferBarsPerDay(candles) {
+    if (!Array.isArray(candles) || candles.length < 10) return 96;
+
+    const deltas = [];
+    for (let i = 1; i < candles.length; i++) {
+      const prev = Number(candles[i - 1][0]);
+      const current = Number(candles[i][0]);
+      const delta = current - prev;
+      if (Number.isFinite(delta) && delta > 0) deltas.push(delta);
+    }
+
+    if (!deltas.length) return 96;
+    const medianDeltaMs = stats.median(deltas);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const barsPerDay = Math.round(dayMs / medianDeltaMs);
+
+    return Math.max(12, Math.min(288, barsPerDay));
+  }
+
+  classifyMultiDayRegime(candles) {
+    if (!Array.isArray(candles) || candles.length < 60) return null;
+
+    const lookbackDays = Math.max(2, Number(this.config.REGIME_LOOKBACK_DAYS || 4));
+    const barsPerDay = this.inferBarsPerDay(candles);
+    const lookbackBars = Math.max(40, lookbackDays * barsPerDay);
+    const sample = candles.slice(-lookbackBars);
+
+    if (sample.length < 40) return null;
+
+    const closes = sample.map((c) => Number(c[4])).filter((v) => Number.isFinite(v));
+    const highs = sample.map((c) => Number(c[2])).filter((v) => Number.isFinite(v));
+    const lows = sample.map((c) => Number(c[3])).filter((v) => Number.isFinite(v));
+
+    if (closes.length < 40 || !highs.length || !lows.length) return null;
+
+    const firstClose = closes[0];
+    const lastClose = closes[closes.length - 1];
+    const movePct = firstClose > 0 ? ((lastClose - firstClose) / firstClose) * 100 : 0;
+    const regressionResult = this.calculateTrendRegression(closes);
+    const trendStrength = Math.abs(Number(regressionResult?.r2 || 0));
+    const rangePct =
+      firstClose > 0
+        ? ((Math.max(...highs) - Math.min(...lows)) / firstClose) * 100
+        : 0;
+    const directionalEfficiency =
+      rangePct > 0 ? Math.min(Math.abs(movePct) / rangePct, 1) : 0;
+
+    let type = "CHOPPY";
+    if (Math.abs(movePct) >= 2.0 && trendStrength >= 0.45 && directionalEfficiency >= 0.35) {
+      type = "TRENDING";
+    } else if (
+      Math.abs(movePct) <= 1.5 ||
+      trendStrength < 0.3 ||
+      directionalEfficiency < 0.2
+    ) {
+      type = "RANGING";
+    }
+
+    const direction =
+      movePct > 0.25 ? "UP" : movePct < -0.25 ? "DOWN" : "SIDEWAYS";
+
+    const confidence = Math.max(
+      0,
+      Math.min(
+        100,
+        trendStrength * 45 +
+          Math.min(Math.abs(movePct) * 8, 30) +
+          directionalEfficiency * 25,
+      ),
+    );
+
+    return {
+      type,
+      direction,
+      confidence: Number(confidence.toFixed(1)),
+      movePct: Number(movePct.toFixed(2)),
+      trendStrength: Number(trendStrength.toFixed(3)),
+      rangePct: Number(rangePct.toFixed(2)),
+      directionalEfficiency: Number(directionalEfficiency.toFixed(3)),
+      barsPerDay,
+      lookbackDays,
+      sampleBars: sample.length,
+    };
+  }
+
+  estimateAtrFromCandles(candles, period = 14) {
+    if (!Array.isArray(candles) || candles.length < period + 1) return null;
+
+    const sample = candles.slice(-(period + 1));
+    let trSum = 0;
+
+    for (let i = 1; i < sample.length; i++) {
+      const high = Number(sample[i][2]);
+      const low = Number(sample[i][3]);
+      const prevClose = Number(sample[i - 1][4]);
+      const tr = Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose),
+      );
+      trSum += Number.isFinite(tr) ? tr : 0;
+    }
+
+    return trSum / period;
+  }
+
+  classifyValueLocation(currentPrice, volumeProfile, candles) {
+    const price = Number(currentPrice);
+    if (!Number.isFinite(price) || price <= 0 || !volumeProfile) return null;
+
+    const valueArea = volumeProfile.valueArea || {};
+    const valueHigh = Number(valueArea.high);
+    const valueLow = Number(valueArea.low);
+    const poc = Number(volumeProfile.poc || volumeProfile.pocPrice || valueArea.poc);
+
+    if (
+      !Number.isFinite(valueHigh) ||
+      !Number.isFinite(valueLow) ||
+      valueHigh <= 0 ||
+      valueLow <= 0 ||
+      valueHigh < valueLow
+    ) {
+      return null;
+    }
+
+    const atr = this.estimateAtrFromCandles(candles, 14);
+    const atrPct = Number.isFinite(atr) && atr > 0 ? atr / price : 0;
+    const boundaryBufferPct = Math.max(0.0015, atrPct * 0.35);
+
+    let zone = "INSIDE_VALUE";
+    if (price > valueHigh * (1 + boundaryBufferPct)) {
+      zone = "ABOVE_VALUE";
+    } else if (price >= valueHigh * (1 - boundaryBufferPct)) {
+      zone = "AT_VALUE_HIGH";
+    } else if (price < valueLow * (1 - boundaryBufferPct)) {
+      zone = "BELOW_VALUE";
+    } else if (price <= valueLow * (1 + boundaryBufferPct)) {
+      zone = "AT_VALUE_LOW";
+    }
+
+    const phase =
+      zone === "ABOVE_VALUE"
+        ? "DISTRIBUTION"
+        : zone === "BELOW_VALUE"
+          ? "ACCUMULATION"
+          : "FAIR_VALUE";
+
+    const distanceFromPocPct =
+      Number.isFinite(poc) && poc > 0
+        ? Number((((price - poc) / poc) * 100).toFixed(2))
+        : null;
+
+    return {
+      zone,
+      phase,
+      valueLow: Number(valueLow.toFixed(4)),
+      valueHigh: Number(valueHigh.toFixed(4)),
+      poc: Number.isFinite(poc) ? Number(poc.toFixed(4)) : null,
+      boundaryBufferPct: Number((boundaryBufferPct * 100).toFixed(2)),
+      distanceFromPocPct,
+    };
+  }
+
+  applyValueLocationFilter(decision) {
+    const action = decision?.action;
+    const regime = decision?.marketRegime;
+    const valueLocation = regime?.valueLocation;
+
+    if (!decision || action === "HOLD" || !regime || !valueLocation) return;
+
+    const zone = valueLocation.zone;
+    const effectiveRegime = regime.multiDayType || regime.type;
+    const regimeDirection = regime.multiDayDirection || "SIDEWAYS";
+    const intradayDirection = regime.intradayDirection || null;
+    const isRangeLike = effectiveRegime === "RANGING" || effectiveRegime === "CHOPPY";
+    const bullishBias =
+      regimeDirection === "UP" || intradayDirection === "BULLISH";
+    const bearishBias =
+      regimeDirection === "DOWN" || intradayDirection === "BEARISH";
+
+    const longZones = ["AT_VALUE_LOW", "BELOW_VALUE"];
+    const shortZones = ["AT_VALUE_HIGH", "ABOVE_VALUE"];
+
+    if (isRangeLike) {
+      const validLong = action === "LONG" && longZones.includes(zone);
+      const validShort = action === "SHORT" && shortZones.includes(zone);
+
+      if (!validLong && !validShort) {
+        decision.action = "HOLD";
+        decision.confidence -= 20;
+        decision.warnings.push(
+          `فلتر Value Area: ${zone} غير مناسب لدخول ${action} في سوق ${effectiveRegime}`,
+        );
+        decision.opposingFactors.push("رفض الدخول: بيع القاع/شراء القمة داخل سوق عرضي");
+      } else {
+        decision.supportingFactors.push(
+          `موقع سعري مناسب (${zone}) لدخول ${action} في سوق ${effectiveRegime}`,
+        );
+      }
+      return;
+    }
+
+    const enablePullbackEntries = this.config.ENABLE_PULLBACK_ENTRIES !== false;
+    const maxDistanceFromPocPct = Number(
+      this.config.PULLBACK_MAX_DISTANCE_FROM_POC_PCT || 0.8,
+    );
+    const minFactorAdvantage = Number(
+      this.config.PULLBACK_MIN_FACTOR_ADVANTAGE || 0,
+    );
+    const distanceFromPocAbs = Math.abs(
+      Number(valueLocation.distanceFromPocPct ?? 999),
+    );
+    const bullishFactors = Number(decision?.decisionMetrics?.bullishFactors || 0);
+    const bearishFactors = Number(decision?.decisionMetrics?.bearishFactors || 0);
+
+    if (
+      enablePullbackEntries &&
+      effectiveRegime === "TRENDING" &&
+      zone === "INSIDE_VALUE"
+    ) {
+      const nearPoc =
+        Number.isFinite(distanceFromPocAbs) &&
+        distanceFromPocAbs <= maxDistanceFromPocPct;
+
+      if (nearPoc) {
+        if (
+          action === "LONG" &&
+          bullishBias &&
+          bullishFactors >= bearishFactors + minFactorAdvantage
+        ) {
+          decision.supportingFactors.push(
+            `Pullback Entry: LONG من داخل القيمة قرب POC (${distanceFromPocAbs.toFixed(2)}%) مع اتجاه صاعد`,
+          );
+          return;
+        }
+
+        if (
+          action === "SHORT" &&
+          bearishBias &&
+          bearishFactors >= bullishFactors + minFactorAdvantage
+        ) {
+          decision.supportingFactors.push(
+            `Pullback Entry: SHORT من داخل القيمة قرب POC (${distanceFromPocAbs.toFixed(2)}%) مع اتجاه هابط`,
+          );
+          return;
+        }
+      }
+
+      decision.action = "HOLD";
+      decision.confidence -= 10;
+      decision.warnings.push(
+        `رفض Pullback غير واضح داخل القيمة (${zone}) - لا يوجد تحيز اتجاهي كافي`,
+      );
+      decision.opposingFactors.push("تصحيح داخلي بدون أفضلية عوامل كافية");
+      return;
+    }
+
+    if (
+      action === "SHORT" &&
+      regimeDirection === "UP" &&
+      !shortZones.includes(zone)
+    ) {
+      decision.action = "HOLD";
+      decision.confidence -= 15;
+      decision.warnings.push(
+        `فلتر اتجاه ${effectiveRegime}: منع SHORT بعيد عن قمة القيمة (${zone})`,
+      );
+      decision.opposingFactors.push("Counter-trend short بدون امتداد سعري واضح");
+      return;
+    }
+
+    if (
+      action === "LONG" &&
+      regimeDirection === "DOWN" &&
+      !longZones.includes(zone)
+    ) {
+      decision.action = "HOLD";
+      decision.confidence -= 15;
+      decision.warnings.push(
+        `فلتر اتجاه ${effectiveRegime}: منع LONG بعيد عن قاع القيمة (${zone})`,
+      );
+      decision.opposingFactors.push("Counter-trend long بدون خصم سعري واضح");
+      return;
+    }
+
+    decision.supportingFactors.push(
+      `فلتر Value Area متوافق مع الاتجاه (${effectiveRegime}/${regimeDirection})`,
+    );
   }
 
   /**

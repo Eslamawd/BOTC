@@ -133,17 +133,52 @@ class TradeManager {
   calculateSmartLevels(entryPrice, analysis, side) {
     const isLong = isLongSignal(side);
     const atr = this.getAtrValue(analysis, entryPrice);
+    const regimeType = analysis?.marketRegime?.type || "DEFAULT";
+    const valueZone = analysis?.marketRegime?.valueLocation?.zone || null;
+    const defaultStopAtrMultiplier = Number(
+      this.config.STOPLOSS_ATR_MULTIPLIER || 1.8,
+    );
+    const stopAtrMultiplierByRegime =
+      regimeType === "TRENDING"
+        ? Number(
+            this.config.TRENDING_STOPLOSS_ATR_MULTIPLIER ||
+              defaultStopAtrMultiplier,
+          )
+        : regimeType === "RANGING"
+          ? Number(
+              this.config.RANGING_STOPLOSS_ATR_MULTIPLIER ||
+                defaultStopAtrMultiplier,
+            )
+          : regimeType === "CHOPPY"
+            ? Number(
+                this.config.CHOPPY_STOPLOSS_ATR_MULTIPLIER ||
+                  defaultStopAtrMultiplier,
+              )
+            : defaultStopAtrMultiplier;
+
+    const insideValueBoost =
+      valueZone === "INSIDE_VALUE"
+        ? Number(this.config.INSIDE_VALUE_STOPLOSS_BOOST || 1.12)
+        : 1;
+    const stopAtrMultiplier = stopAtrMultiplierByRegime * insideValueBoost;
+
     const minStopDistancePct = Number(
       this.config.MIN_STOP_DISTANCE_PCT || 0.006,
     );
+    const stopLossMinPct = Number(this.config.STOPLOSS_MIN_PCT || 0.009);
     const minStopDistance = entryPrice * minStopDistancePct;
+    const minStopDistanceByPct = entryPrice * stopLossMinPct;
+    const requiredStopDistance = Math.max(
+      minStopDistance,
+      minStopDistanceByPct,
+    );
 
     const baseTakeProfit = isLong
       ? entryPrice + atr * 2.5
       : entryPrice - atr * 2.5;
     const baseStopLoss = isLong
-      ? entryPrice - atr * 1.2
-      : entryPrice + atr * 1.2;
+      ? entryPrice - atr * stopAtrMultiplier
+      : entryPrice + atr * stopAtrMultiplier;
 
     const orderBook = analysis?.orderBook || analysis?._rawData?.orderBook;
     const walls = this.findOrderBookWalls(orderBook, entryPrice);
@@ -174,7 +209,7 @@ class TradeManager {
       if (takeProfit <= entryPrice) takeProfit = entryPrice + atr * 0.5;
       if (stopLoss >= entryPrice) stopLoss = entryPrice - atr * 0.5;
 
-      const maxAllowedStopLoss = entryPrice - minStopDistance;
+      const maxAllowedStopLoss = entryPrice - requiredStopDistance;
       if (stopLoss > maxAllowedStopLoss) {
         stopLoss = maxAllowedStopLoss;
       }
@@ -182,7 +217,7 @@ class TradeManager {
       if (takeProfit >= entryPrice) takeProfit = entryPrice - atr * 0.5;
       if (stopLoss <= entryPrice) stopLoss = entryPrice + atr * 0.5;
 
-      const minAllowedStopLoss = entryPrice + minStopDistance;
+      const minAllowedStopLoss = entryPrice + requiredStopDistance;
       if (stopLoss < minAllowedStopLoss) {
         stopLoss = minAllowedStopLoss;
       }
@@ -192,9 +227,59 @@ class TradeManager {
       atr,
       takeProfit,
       stopLoss,
+      stopAtrMultiplier,
+      requiredStopDistance,
       walls,
       baseTakeProfit,
       baseStopLoss,
+    };
+  }
+
+  evaluateTradeQuality(entryPrice, smartLevels, side, analysis = {}) {
+    const isLong = isLongSignal(side);
+    const marketRegime = analysis?.marketRegime?.type || "DEFAULT";
+
+    const riskDistance = isLong
+      ? entryPrice - smartLevels.stopLoss
+      : smartLevels.stopLoss - entryPrice;
+    const rewardDistance = isLong
+      ? smartLevels.takeProfit - entryPrice
+      : entryPrice - smartLevels.takeProfit;
+
+    if (riskDistance <= 0 || rewardDistance <= 0) {
+      return {
+        allowed: false,
+        rrRatio: 0,
+        riskDistance,
+        rewardDistance,
+        minRrRequired: 0,
+      };
+    }
+
+    const rrRatio = rewardDistance / riskDistance;
+    const minRrBase = Number(this.config.MIN_RR_RATIO || 1.35);
+    const minRrRequired =
+      marketRegime === "CHOPPY"
+        ? Number(this.config.CHOPPY_MIN_RR_RATIO || Math.max(1.8, minRrBase))
+        : marketRegime === "RANGING"
+          ? Number(this.config.RANGING_MIN_RR_RATIO || Math.max(1.5, minRrBase))
+          : marketRegime === "TRENDING"
+            ? Number(
+                this.config.TRENDING_MIN_RR_RATIO || Math.max(1.2, minRrBase),
+              )
+            : minRrBase;
+
+    const minTakeProfitPct = Number(this.config.MIN_TAKE_PROFIT_PCT || 0.6);
+    const rewardPct = (rewardDistance / entryPrice) * 100;
+
+    return {
+      allowed: rrRatio >= minRrRequired && rewardPct >= minTakeProfitPct,
+      rrRatio,
+      riskDistance,
+      rewardDistance,
+      rewardPct,
+      minRrRequired,
+      minTakeProfitPct,
     };
   }
 
@@ -221,6 +306,13 @@ class TradeManager {
     const side = analysis.side || ORDER_ACTIONS.BUY; // BUY/LONG للشراء، SELL/SHORT للبيع
     const dynamicTimeoutHours = this.calculateDynamicTimeoutHours(analysis);
     const smartLevels = this.calculateSmartLevels(price, analysis, side);
+    const tradeQuality = this.evaluateTradeQuality(
+      price,
+      smartLevels,
+      side,
+      analysis,
+    );
+    if (!tradeQuality.allowed) return null;
 
     // حساب الكمية (quantity) = positionSize / price
     const quantity = positionSize / price;
@@ -246,6 +338,11 @@ class TradeManager {
       takeProfit: smartLevels.takeProfit,
       trailingTPPrice: smartLevels.takeProfit,
       atr: smartLevels.atr,
+      stopAtrMultiplier: smartLevels.stopAtrMultiplier,
+      requiredStopDistance: smartLevels.requiredStopDistance,
+      rrRatio: tradeQuality.rrRatio,
+      rewardPct: tradeQuality.rewardPct,
+      minRrRequired: tradeQuality.minRrRequired,
       orderBookWalls: smartLevels.walls,
       breakEvenActivated: false,
       aggressiveTrailActivated: false,
@@ -267,7 +364,73 @@ class TradeManager {
   /**
    * تحديث الصفقة مع Trailing (يدعم LONG و SHORT) - SCALPING MODE
    */
-  updateTradeTrailing(trade, currentPrice, timestamp) {
+  getCandleDirection(candle) {
+    if (!Array.isArray(candle) || candle.length < 5) return null;
+    const open = Number(candle[1]);
+    const close = Number(candle[4]);
+    if (!Number.isFinite(open) || !Number.isFinite(close)) return null;
+    if (close > open) return "BULLISH";
+    if (close < open) return "BEARISH";
+    return "DOJI";
+  }
+
+  shouldExitOnReversalCandle(
+    trade,
+    currentPrice,
+    isLong,
+    candleContext = null,
+  ) {
+    if (this.config.ENABLE_REVERSAL_CANDLE_EXIT === false) return false;
+    if (!candleContext) return false;
+
+    const previousDirection = this.getCandleDirection(
+      candleContext.previousClosed,
+    );
+    const currentDirection = this.getCandleDirection(
+      candleContext.currentClosed,
+    );
+
+    if (!previousDirection || !currentDirection) return false;
+
+    const minProfitPct = Number(
+      this.config.REVERSAL_EXIT_MIN_PROFIT_PCT || 0.3,
+    );
+    const minPullbackPct = Number(
+      this.config.REVERSAL_EXIT_MIN_PULLBACK_PCT || 0.12,
+    );
+
+    if (isLong) {
+      const profitPct =
+        ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
+      const pullbackFromHighPct =
+        trade.highestPrice > 0
+          ? ((trade.highestPrice - currentPrice) / trade.highestPrice) * 100
+          : 0;
+
+      return (
+        previousDirection === "BULLISH" &&
+        currentDirection === "BEARISH" &&
+        profitPct >= minProfitPct &&
+        pullbackFromHighPct >= minPullbackPct
+      );
+    }
+
+    const profitPct =
+      ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
+    const bounceFromLowPct =
+      trade.lowestPrice > 0
+        ? ((currentPrice - trade.lowestPrice) / trade.lowestPrice) * 100
+        : 0;
+
+    return (
+      previousDirection === "BEARISH" &&
+      currentDirection === "BULLISH" &&
+      profitPct >= minProfitPct &&
+      bounceFromLowPct >= minPullbackPct
+    );
+  }
+
+  updateTradeTrailing(trade, currentPrice, timestamp, candleContext = null) {
     let shouldClose = false;
     let exitPrice = currentPrice;
     let reason = "";
@@ -278,9 +441,16 @@ class TradeManager {
       this.config.TRAILING_MIN_DISTANCE_PCT || 0.005,
     );
     const minTrailDistance = trade.entryPrice * minTrailDistancePct;
-    const breakEvenTrigger = atr;
-    const standardTrailMultiplier = 1.2;
-    const aggressiveTrailMultiplier = 0.6;
+    const breakEvenTrigger =
+      atr * Number(this.config.BREAK_EVEN_ATR_TRIGGER_MULTIPLIER || 1.6);
+    const breakEvenOffset =
+      atr * Number(this.config.BREAK_EVEN_OFFSET_ATR_MULTIPLIER || 0.8);
+    const standardTrailMultiplier = Number(
+      this.config.TRAILING_STANDARD_ATR_MULTIPLIER || 1.5,
+    );
+    const aggressiveTrailMultiplier = Number(
+      this.config.TRAILING_AGGRESSIVE_ATR_MULTIPLIER || 0.9,
+    );
 
     // ========== LONG TRADES (BUY) ==========
     if (isLong) {
@@ -293,7 +463,7 @@ class TradeManager {
       if (atr > 0 && profitMove >= breakEvenTrigger) {
         trade.breakEvenActivated = true;
         trade.aggressiveTrailActivated = true;
-        const breakEvenStop = trade.entryPrice - atr * 0.5;
+        const breakEvenStop = trade.entryPrice - breakEvenOffset;
         if (trade.trailingStopPrice < breakEvenStop) {
           trade.trailingStopPrice = breakEvenStop;
         }
@@ -319,6 +489,20 @@ class TradeManager {
         reason = CLOSE_REASONS.TRAILING_SL;
       }
 
+      if (
+        !shouldClose &&
+        this.shouldExitOnReversalCandle(
+          trade,
+          currentPrice,
+          true,
+          candleContext,
+        )
+      ) {
+        shouldClose = true;
+        exitPrice = currentPrice;
+        reason = CLOSE_REASONS.REVERSAL_CANDLE;
+      }
+
       if (currentPrice >= trade.takeProfit && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.takeProfit;
@@ -336,7 +520,7 @@ class TradeManager {
       if (atr > 0 && profitMove >= breakEvenTrigger) {
         trade.breakEvenActivated = true;
         trade.aggressiveTrailActivated = true;
-        const breakEvenStop = trade.entryPrice + atr * 0.5;
+        const breakEvenStop = trade.entryPrice + breakEvenOffset;
         if (trade.trailingStopPrice > breakEvenStop) {
           trade.trailingStopPrice = breakEvenStop;
         }
@@ -360,6 +544,20 @@ class TradeManager {
         shouldClose = true;
         exitPrice = trade.trailingStopPrice;
         reason = CLOSE_REASONS.TRAILING_SL;
+      }
+
+      if (
+        !shouldClose &&
+        this.shouldExitOnReversalCandle(
+          trade,
+          currentPrice,
+          false,
+          candleContext,
+        )
+      ) {
+        shouldClose = true;
+        exitPrice = currentPrice;
+        reason = CLOSE_REASONS.REVERSAL_CANDLE;
       }
 
       if (currentPrice <= trade.takeProfit && !shouldClose) {

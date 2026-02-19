@@ -75,8 +75,38 @@ const CONFIG = {
   TRAILING_STEP: 0.001,
   ATR_MIN_PCT: parseFloat(process.env.ATR_MIN_PCT) || 0.005, // ✅ أقل ATR = 0.5% من السعر
   MIN_STOP_DISTANCE_PCT: parseFloat(process.env.MIN_STOP_DISTANCE_PCT) || 0.006, // ✅ أقل مسافة SL = 0.6%
+  STOPLOSS_MIN_PCT: parseFloat(process.env.STOPLOSS_MIN_PCT) || 0.009, // ✅ أرضية SL = 0.9% من سعر الدخول
+  STOPLOSS_ATR_MULTIPLIER:
+    parseFloat(process.env.STOPLOSS_ATR_MULTIPLIER) || 1.8,
+  TRENDING_STOPLOSS_ATR_MULTIPLIER:
+    parseFloat(process.env.TRENDING_STOPLOSS_ATR_MULTIPLIER) || 1.7,
+  RANGING_STOPLOSS_ATR_MULTIPLIER:
+    parseFloat(process.env.RANGING_STOPLOSS_ATR_MULTIPLIER) || 2.1,
+  CHOPPY_STOPLOSS_ATR_MULTIPLIER:
+    parseFloat(process.env.CHOPPY_STOPLOSS_ATR_MULTIPLIER) || 2.4,
+  INSIDE_VALUE_STOPLOSS_BOOST:
+    parseFloat(process.env.INSIDE_VALUE_STOPLOSS_BOOST) || 1.12,
   TRAILING_MIN_DISTANCE_PCT:
     parseFloat(process.env.TRAILING_MIN_DISTANCE_PCT) || 0.005, // ✅ أقل مسافة Trailing = 0.5%
+  BREAK_EVEN_ATR_TRIGGER_MULTIPLIER:
+    parseFloat(process.env.BREAK_EVEN_ATR_TRIGGER_MULTIPLIER) || 1.6,
+  BREAK_EVEN_OFFSET_ATR_MULTIPLIER:
+    parseFloat(process.env.BREAK_EVEN_OFFSET_ATR_MULTIPLIER) || 0.8,
+  TRAILING_STANDARD_ATR_MULTIPLIER:
+    parseFloat(process.env.TRAILING_STANDARD_ATR_MULTIPLIER) || 1.5,
+  TRAILING_AGGRESSIVE_ATR_MULTIPLIER:
+    parseFloat(process.env.TRAILING_AGGRESSIVE_ATR_MULTIPLIER) || 0.9,
+  MIN_RR_RATIO: parseFloat(process.env.MIN_RR_RATIO) || 1.35,
+  TRENDING_MIN_RR_RATIO: parseFloat(process.env.TRENDING_MIN_RR_RATIO) || 1.2,
+  RANGING_MIN_RR_RATIO: parseFloat(process.env.RANGING_MIN_RR_RATIO) || 1.5,
+  CHOPPY_MIN_RR_RATIO: parseFloat(process.env.CHOPPY_MIN_RR_RATIO) || 1.8,
+  MIN_TAKE_PROFIT_PCT: parseFloat(process.env.MIN_TAKE_PROFIT_PCT) || 0.6,
+  ENABLE_REVERSAL_CANDLE_EXIT:
+    process.env.ENABLE_REVERSAL_CANDLE_EXIT !== "false",
+  REVERSAL_EXIT_MIN_PROFIT_PCT:
+    parseFloat(process.env.REVERSAL_EXIT_MIN_PROFIT_PCT) || 0.3,
+  REVERSAL_EXIT_MIN_PULLBACK_PCT:
+    parseFloat(process.env.REVERSAL_EXIT_MIN_PULLBACK_PCT) || 0.12,
   USE_UNLIMITED_PROFIT: false, // ❌ بدون unlimited! TP ثابت = إغلاق فوري
 
   // 🎯 خيارات إضافية للـ Advanced AI
@@ -132,6 +162,14 @@ const CONFIG = {
     parseFloat(process.env.ORDERBOOK_REFERENCE_WEIGHT) || 0.08,
   ORDERBOOK_BOOST: parseFloat(process.env.ORDERBOOK_BOOST) || 4,
   ORDERBOOK_PENALTY: parseFloat(process.env.ORDERBOOK_PENALTY) || 6,
+  ENABLE_VALUE_LOCATION_FILTER:
+    process.env.ENABLE_VALUE_LOCATION_FILTER !== "false",
+  REGIME_LOOKBACK_DAYS: parseInt(process.env.REGIME_LOOKBACK_DAYS) || 4,
+  ENABLE_PULLBACK_ENTRIES: process.env.ENABLE_PULLBACK_ENTRIES !== "false",
+  PULLBACK_MAX_DISTANCE_FROM_POC_PCT:
+    parseFloat(process.env.PULLBACK_MAX_DISTANCE_FROM_POC_PCT) || 0.8,
+  PULLBACK_MIN_FACTOR_ADVANTAGE:
+    parseInt(process.env.PULLBACK_MIN_FACTOR_ADVANTAGE) || 0,
   REQUIRE_ORDERBOOK_CONFIRMATION:
     process.env.REQUIRE_ORDERBOOK_CONFIRMATION !== "false",
   ALLOW_LONGS: process.env.ALLOW_LONGS !== "false",
@@ -748,10 +786,22 @@ class AdvancedTradingAI {
       // 4️⃣ تحديث الصفقات القائمة (Trailing SL/TP)
       const activeTrades = this.symbolData[symbol]?.activeTrades || [];
       const tradesToKeep = [];
+      const candleContext =
+        candles15m.length >= 3
+          ? {
+              previousClosed: candles15m[candles15m.length - 3],
+              currentClosed: candles15m[candles15m.length - 2],
+            }
+          : null;
 
       for (const trade of activeTrades) {
         const { shouldClose, exitPrice, reason } =
-          this.tradeManager.updateTradeTrailing(trade, currentPrice, timestamp);
+          this.tradeManager.updateTradeTrailing(
+            trade,
+            currentPrice,
+            timestamp,
+            candleContext,
+          );
 
         if (shouldClose) {
           await this.closeTrade(symbol, trade, exitPrice, reason);
@@ -929,7 +979,7 @@ class AdvancedTradingAI {
             const emoji = action === ORDER_ACTIONS.BUY ? "🟢" : "🔴";
 
             console.log(
-              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Regime: ${adaptiveThresholds.regimeType} | Risk x${analysis.riskMultiplier.toFixed(2)} | Timeout: ${trade.timeoutHours}h | Mode: ${trade.executionMode}`,
+              `${emoji} [${symbol}] ${action} @ $${currentPrice.toFixed(2)} | 1h: ${decision.trendSide} | 15m: ${decision.entrySide} | Conf: ${analysis.confidence}% | Regime: ${adaptiveThresholds.regimeType} | RR: ${Number(trade.rrRatio || 0).toFixed(2)} | Risk x${analysis.riskMultiplier.toFixed(2)} | Timeout: ${trade.timeoutHours}h | Mode: ${trade.executionMode}`,
             );
 
             if (decision.mode === "override") {
