@@ -162,12 +162,11 @@ const CONFIG = {
     parseFloat(process.env.ORDERBOOK_REFERENCE_WEIGHT) || 0.08,
   ORDERBOOK_BOOST: parseFloat(process.env.ORDERBOOK_BOOST) || 4,
   ORDERBOOK_PENALTY: parseFloat(process.env.ORDERBOOK_PENALTY) || 6,
-  ENABLE_VALUE_LOCATION_FILTER:
-    process.env.ENABLE_VALUE_LOCATION_FILTER !== "false",
+  ENABLE_VALUE_LOCATION_FILTER: false, // تعطيل فلتر القيمة للسماح بمناطق دخول أوسع
   REGIME_LOOKBACK_DAYS: parseInt(process.env.REGIME_LOOKBACK_DAYS) || 4,
-  ENABLE_PULLBACK_ENTRIES: process.env.ENABLE_PULLBACK_ENTRIES !== "false",
+  ENABLE_PULLBACK_ENTRIES: true, // تفعيل دخول التصحيحات دائمًا
   PULLBACK_MAX_DISTANCE_FROM_POC_PCT:
-    parseFloat(process.env.PULLBACK_MAX_DISTANCE_FROM_POC_PCT) || 0.8,
+    parseFloat(process.env.PULLBACK_MAX_DISTANCE_FROM_POC_PCT) || 1.7, // يسمح بدخول أبعد عن POC
   PULLBACK_MIN_FACTOR_ADVANTAGE:
     parseInt(process.env.PULLBACK_MIN_FACTOR_ADVANTAGE) || 0,
   REQUIRE_ORDERBOOK_CONFIRMATION:
@@ -190,9 +189,9 @@ const CONFIG = {
   // 🎛️ Trade Pacing (Target trades/day)
   ENABLE_TRADE_PACING: process.env.ENABLE_TRADE_PACING !== "false",
   TARGET_MAX_TRADES_PER_DAY:
-    parseInt(process.env.TARGET_MAX_TRADES_PER_DAY) || 10,
+    parseInt(process.env.TARGET_MAX_TRADES_PER_DAY) || 22,
   MIN_MINUTES_BETWEEN_ENTRIES_PER_SYMBOL:
-    parseInt(process.env.MIN_MINUTES_BETWEEN_ENTRIES_PER_SYMBOL) || 15,
+    parseInt(process.env.MIN_MINUTES_BETWEEN_ENTRIES_PER_SYMBOL) || 4,
 
   // 🎯 Mode (يتم قراءته من environment variable اللي بيروح من pm2)
   // PAPER/LIVE_PAPER = تداول تجريبي بأسعار حقيقية (real-time)
@@ -1142,6 +1141,48 @@ class AdvancedTradingAI {
       this.performance,
       this.config.INITIAL_BALANCE,
     );
+
+    // 🚀 منطق عكس الصفقة (Reverse Position) عند انعكاس قوي
+    // لو سبب الإغلاق انعكاس (مثلاً: REVERSAL_CANDLE أو إشارة انعكاس قوية)
+    if (
+      ["REVERSAL_CANDLE", "STRONG_REVERSAL", "REVERSE_SIGNAL"].includes(reason)
+    ) {
+      // عكس الاتجاه
+      const newSide =
+        trade.side === ORDER_ACTIONS.BUY
+          ? ORDER_ACTIONS.SELL
+          : ORDER_ACTIONS.BUY;
+      // فتح صفقة عكسية مباشرة بنفس التحليل السابق (مع تحديث الاتجاه)
+      const analysis = Object.assign({}, trade.analysis || {}, {
+        side: newSide,
+      });
+      // جلب السعر الحالي (أو استخدم exitPrice)
+      const entryPrice = exitPrice;
+      // فتح الصفقة العكسية
+      const newTrade = this.tradeManager.openTrade(
+        symbol,
+        entryPrice,
+        analysis,
+        this.balance,
+        this.symbolData[symbol].activeTrades.length,
+      );
+      if (newTrade) {
+        newTrade.executionMode = trade.executionMode;
+        newTrade.marketRegime = analysis.marketRegime || null;
+        newTrade.entryExplainability = analysis.explainability || null;
+        this.symbolData[symbol].activeTrades.push(newTrade);
+        this.balance -= newTrade.positionSize;
+        this.refreshTradePacingDay();
+        this.tradePacing.entriesToday += 1;
+        this.tradePacing.lastEntryAtBySymbol[symbol] = Date.now();
+        const action = newSide;
+        const emoji = action === ORDER_ACTIONS.BUY ? "🟢" : "🔴";
+        console.log(
+          `${emoji} [${symbol}] REVERSE ${action} @ $${entryPrice.toFixed(2)} | عكس الصفقة بسبب انعكاس قوي!`,
+        );
+        await this.notifyTelegramEntry(newTrade, analysis);
+      }
+    }
   }
 
   /**
