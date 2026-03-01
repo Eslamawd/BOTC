@@ -121,6 +121,7 @@ class SymbolicAI {
       whalePatterns,
       pricePrediction,
       indicatorCorrelation,
+      indicators,
       candles,
       volumeProfile,
       currentPrice,
@@ -643,6 +644,7 @@ class SymbolicAI {
       whalePatterns,
       pricePrediction,
       indicatorCorrelation,
+      indicators,
       candles,
       volumeProfile,
       currentPrice,
@@ -807,6 +809,11 @@ class SymbolicAI {
       decision.reasoning.push("عدم توفر إجماع كافي للدخول");
     }
 
+    this.applyExtremeMeanReversionRule(decision, {
+      indicators,
+      marketRegime: decision.marketRegime,
+    });
+
     // Order Book كمرجع فقط: boost/penalty بعد القرار النهائي
     if (
       orderBookModel &&
@@ -847,6 +854,95 @@ class SymbolicAI {
     decision.confidence = Math.max(0, Math.min(100, decision.confidence));
 
     return decision;
+  }
+
+  applyExtremeMeanReversionRule(decision, context = {}) {
+    if (!decision || this.config.ENABLE_EXTREME_MEAN_REVERSION === false) return;
+
+    const marketRegime = context.marketRegime;
+    const valueLocation = marketRegime?.valueLocation;
+    const rsi = Number(context?.indicators?.rsi);
+
+    if (!valueLocation || !Number.isFinite(rsi)) return;
+
+    const overboughtRsi = Number(this.config.EXTREME_RSI_OVERBOUGHT || 72);
+    const oversoldRsi = Number(this.config.EXTREME_RSI_OVERSOLD || 28);
+    const minDistanceFromPocPct = Number(
+      this.config.EXTREME_MIN_DISTANCE_FROM_POC_PCT || 0.35,
+    );
+    const reversionBoost = Number(
+      this.config.EXTREME_REVERSION_CONFIDENCE_BOOST || 8,
+    );
+    const trendBlockConfidence = Number(
+      this.config.EXTREME_TREND_BLOCK_CONFIDENCE || 72,
+    );
+
+    const zone = valueLocation.zone;
+    const topZones = ["AT_VALUE_HIGH", "ABOVE_VALUE"];
+    const bottomZones = ["AT_VALUE_LOW", "BELOW_VALUE"];
+
+    const atTop = topZones.includes(zone);
+    const atBottom = bottomZones.includes(zone);
+    const stretchedFromPoc =
+      Math.abs(Number(valueLocation.distanceFromPocPct ?? 0)) >=
+      minDistanceFromPocPct;
+
+    if (!stretchedFromPoc) return;
+
+    const effectiveType = marketRegime?.multiDayType || marketRegime?.type;
+    const effectiveDirection =
+      marketRegime?.multiDayDirection ||
+      (marketRegime?.intradayDirection === "BULLISH"
+        ? "UP"
+        : marketRegime?.intradayDirection === "BEARISH"
+          ? "DOWN"
+          : "SIDEWAYS");
+    const trendConfidence = Number(
+      marketRegime?.multiDayConfidence ?? marketRegime?.score ?? 0,
+    );
+    const strongTrending =
+      effectiveType === "TRENDING" && trendConfidence >= trendBlockConfidence;
+
+    if (atTop && rsi >= overboughtRsi) {
+      if (strongTrending && effectiveDirection === "UP") {
+        if (decision.action === "SHORT") {
+          decision.action = "HOLD";
+          decision.confidence -= 8;
+        }
+        decision.warnings.push(
+          `تشبع شرائي عند القمة لكن الترند الصاعد قوي (${trendConfidence.toFixed(1)}%) - منع عكس الاتجاه` ,
+        );
+        decision.opposingFactors.push("Strong uptrend block for mean-reversion SHORT");
+        return;
+      }
+
+      decision.action = "SHORT";
+      decision.confidence += reversionBoost;
+      decision.supportingFactors.push(
+        `Mean Reversion: تشبع شرائي RSI ${rsi.toFixed(1)} عند ${zone} → تفضيل SHORT`,
+      );
+      return;
+    }
+
+    if (atBottom && rsi <= oversoldRsi) {
+      if (strongTrending && effectiveDirection === "DOWN") {
+        if (decision.action === "LONG") {
+          decision.action = "HOLD";
+          decision.confidence -= 8;
+        }
+        decision.warnings.push(
+          `تشبع بيعي عند القاع لكن الترند الهابط قوي (${trendConfidence.toFixed(1)}%) - منع عكس الاتجاه`,
+        );
+        decision.opposingFactors.push("Strong downtrend block for mean-reversion LONG");
+        return;
+      }
+
+      decision.action = "LONG";
+      decision.confidence += reversionBoost;
+      decision.supportingFactors.push(
+        `Mean Reversion: تشبع بيعي RSI ${rsi.toFixed(1)} عند ${zone} → تفضيل LONG`,
+      );
+    }
   }
 
   classifyMarketRegime({

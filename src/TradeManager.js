@@ -18,6 +18,12 @@ class TradeManager {
     this.tradingType = config.TRADING_TYPE || "spot";
   }
 
+  isFixedTakeProfitEnabled() {
+    if (this.config.USE_UNLIMITED_PROFIT === true) return false;
+    if (this.config.ENABLE_FIXED_TAKE_PROFIT === false) return false;
+    return true;
+  }
+
   clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
@@ -290,10 +296,13 @@ class TradeManager {
     const maxConcurrent = this.config.MAX_CONCURRENT_TRADES_PER_SYMBOL;
     if (activeTradesCount >= maxConcurrent) return null;
 
-    // حجم الصفقة من الرصيد الأولي
+    // حجم الصفقة = نسبة مباشرة من الرصيد الحالي (مثال: 35%)
+    // في futures: نعتبر النسبة على الـ position size النهائي، ثم نرجع المارجن
+    const targetPositionSize = balance * this.config.RISK_PER_TRADE;
     const rawRiskAmount =
-      (this.config.INITIAL_BALANCE * this.config.RISK_PER_TRADE) /
-      this.config.SYMBOLS.length;
+      this.tradingType === "futures"
+        ? targetPositionSize / this.leverage
+        : targetPositionSize;
     const riskMultiplier = Math.max(0.1, Number(analysis?.riskMultiplier || 1));
     const riskAmount = rawRiskAmount * riskMultiplier;
 
@@ -451,6 +460,7 @@ class TradeManager {
     const aggressiveTrailMultiplier = Number(
       this.config.TRAILING_AGGRESSIVE_ATR_MULTIPLIER || 0.9,
     );
+    const fixedTakeProfitEnabled = this.isFixedTakeProfitEnabled();
 
     // ========== LONG TRADES (BUY) ==========
     if (isLong) {
@@ -503,7 +513,7 @@ class TradeManager {
         reason = CLOSE_REASONS.REVERSAL_CANDLE;
       }
 
-      if (currentPrice >= trade.takeProfit && !shouldClose) {
+      if (fixedTakeProfitEnabled && currentPrice >= trade.takeProfit && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.takeProfit;
         reason = CLOSE_REASONS.TRAILING_TP;
@@ -560,7 +570,7 @@ class TradeManager {
         reason = CLOSE_REASONS.REVERSAL_CANDLE;
       }
 
-      if (currentPrice <= trade.takeProfit && !shouldClose) {
+      if (fixedTakeProfitEnabled && currentPrice <= trade.takeProfit && !shouldClose) {
         shouldClose = true;
         exitPrice = trade.takeProfit;
         reason = CLOSE_REASONS.TRAILING_TP;

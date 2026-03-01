@@ -62,14 +62,14 @@ const CONFIG = {
     "DOGE/USDT",
     "ADA/USDT",
   ],
-  INITIAL_BALANCE: 100,
-  RISK_PER_TRADE: 0.1,
+  INITIAL_BALANCE: parseFloat(process.env.INITIAL_BALANCE) || 100,
+  RISK_PER_TRADE: parseFloat(process.env.RISK_PER_TRADE) || 0.1,
 
   // 🎯 Trading Type & Leverage
   TRADING_TYPE: process.env.TRADING_TYPE || "futures", // 'spot' or 'futures'
   LEVERAGE: parseInt(process.env.LEVERAGE) || 5, // رافعة مالية (Futures فقط)
 
-  // 📊 HYPER SCALPING MODE - ربح سريع 0.5-1% ثم طلع فوراً!
+  // 📊 TREND FOLLOWING MODE - سيب الصفقة تجري مع الاتجاه
   TRAILING_STOP_LOSS: 0.97, // -3% (مساحة تنفّس أكبر للسعر)
   TRAILING_TAKE_PROFIT: 1.02, // +2% (هدف الربح الأساسي)
   TRAILING_STEP: 0.001,
@@ -93,9 +93,9 @@ const CONFIG = {
   BREAK_EVEN_OFFSET_ATR_MULTIPLIER:
     parseFloat(process.env.BREAK_EVEN_OFFSET_ATR_MULTIPLIER) || 0.8,
   TRAILING_STANDARD_ATR_MULTIPLIER:
-    parseFloat(process.env.TRAILING_STANDARD_ATR_MULTIPLIER) || 1.5,
+    parseFloat(process.env.TRAILING_STANDARD_ATR_MULTIPLIER) || 1.9,
   TRAILING_AGGRESSIVE_ATR_MULTIPLIER:
-    parseFloat(process.env.TRAILING_AGGRESSIVE_ATR_MULTIPLIER) || 0.9,
+    parseFloat(process.env.TRAILING_AGGRESSIVE_ATR_MULTIPLIER) || 1.3,
   MIN_RR_RATIO: parseFloat(process.env.MIN_RR_RATIO) || 1.35,
   TRENDING_MIN_RR_RATIO: parseFloat(process.env.TRENDING_MIN_RR_RATIO) || 1.2,
   RANGING_MIN_RR_RATIO: parseFloat(process.env.RANGING_MIN_RR_RATIO) || 1.5,
@@ -107,7 +107,20 @@ const CONFIG = {
     parseFloat(process.env.REVERSAL_EXIT_MIN_PROFIT_PCT) || 0.3,
   REVERSAL_EXIT_MIN_PULLBACK_PCT:
     parseFloat(process.env.REVERSAL_EXIT_MIN_PULLBACK_PCT) || 0.12,
-  USE_UNLIMITED_PROFIT: false, // ❌ بدون unlimited! TP ثابت = إغلاق فوري
+  ENABLE_FIXED_TAKE_PROFIT:
+    process.env.ENABLE_FIXED_TAKE_PROFIT !== "false",
+  USE_UNLIMITED_PROFIT: process.env.USE_UNLIMITED_PROFIT !== "false", // ✅ Trend Following: لا تغلق على TP ثابت
+  ENABLE_EXTREME_MEAN_REVERSION:
+    process.env.ENABLE_EXTREME_MEAN_REVERSION !== "false",
+  EXTREME_RSI_OVERBOUGHT:
+    parseFloat(process.env.EXTREME_RSI_OVERBOUGHT) || 72,
+  EXTREME_RSI_OVERSOLD: parseFloat(process.env.EXTREME_RSI_OVERSOLD) || 28,
+  EXTREME_MIN_DISTANCE_FROM_POC_PCT:
+    parseFloat(process.env.EXTREME_MIN_DISTANCE_FROM_POC_PCT) || 0.35,
+  EXTREME_REVERSION_CONFIDENCE_BOOST:
+    parseFloat(process.env.EXTREME_REVERSION_CONFIDENCE_BOOST) || 8,
+  EXTREME_TREND_BLOCK_CONFIDENCE:
+    parseFloat(process.env.EXTREME_TREND_BLOCK_CONFIDENCE) || 72,
 
   // 🎯 خيارات إضافية للـ Advanced AI
   USE_ORDER_BOOK_ANALYSIS: true, // ✅ استخدم Order Book
@@ -116,11 +129,12 @@ const CONFIG = {
   USE_SYMBOLIC_AI: true, // ✅ استخدم Symbolic AI الكامل
   USE_WEBSOCKET: true, // ✅ استخدم WebSocket للبيانات الحية
 
-  // ⏱️ Trade Management - Hyper Scalping
-  TIMEOUT_HOURS: 4, // ⏱️ 4 ساعات قبل الإغلاق بالـ Timeout
-  TIMEOUT_MIN_HOURS: 2,
-  TIMEOUT_MAX_HOURS: 8,
-  MAX_CONCURRENT_TRADES_PER_SYMBOL: 1,
+  // ⏱️ Trade Management - Trend Following
+  TIMEOUT_HOURS: 12, // مدة أطول للسماح للاتجاه إنه يكمل
+  TIMEOUT_MIN_HOURS: 4,
+  TIMEOUT_MAX_HOURS: 24,
+  MAX_CONCURRENT_TRADES_PER_SYMBOL:
+    parseInt(process.env.MAX_CONCURRENT_TRADES_PER_SYMBOL) || 1,
 
   // 📊 Multi-Timeframe Analysis
   TIMEFRAME_TREND: "1h", // ⏰ الساعة - تحديد الاتجاه العام
@@ -1198,6 +1212,13 @@ class AdvancedTradingAI {
 
     try {
       const signals = (analysis.signals || []).slice(0, 4).join(" | ");
+      const fixedTakeProfitEnabled =
+        this.config.USE_UNLIMITED_PROFIT === true
+          ? false
+          : this.config.ENABLE_FIXED_TAKE_PROFIT !== false;
+      const tpLine = fixedTakeProfitEnabled
+        ? `🎯 *TP:* $${trade.trailingTPPrice.toFixed(2)}`
+        : "🎯 *TP:* Trend Following (Trailing/Reversal/Timeout)";
       const message =
         `🚀 *دخول جديد:* ${trade.symbol}\n` +
         `💰 *السعر:* $${trade.entryPrice.toFixed(2)}\n` +
@@ -1205,7 +1226,7 @@ class AdvancedTradingAI {
         `🎯 *الثقة:* ${analysis.confidence}%\n` +
         `🧭 *إشارات:* ${signals || "-"}\n` +
         `🛑 *SL:* $${trade.trailingStopPrice.toFixed(2)}\n` +
-        `🎯 *TP:* $${trade.trailingTPPrice.toFixed(2)}`;
+        tpLine;
 
       await this.telegramManager.send(message);
       console.log(
